@@ -112,3 +112,35 @@ def test_compare_and_delete_unpaired(env):
     assert r["deleted"] == {"a": 1, "b": 1}
     r = client.get("/api/compare", params={"a": "x", "b": "y"}).json()
     assert len(r["paired"]) == 2 and r["only_a"] == [] and r["only_b"] == []
+
+
+def test_compare_ignores_flips_and_deletes_them(env):
+    client, aitk = env
+    for name, stems in {"x": ["1", "2", "3"], "y": ["2", "3"]}.items():
+        d = aitk / "datasets" / name
+        d.mkdir(parents=True)
+        for s in stems:
+            make_img(d / f"{s}.png")
+            (d / f"{s}.txt").write_text(s)
+    # Flips: x has 1_flip/2_flip, y has an orphan flip only (4_flip).
+    assert len(client.post("/api/datasets/x/flip").json()["created"]) == 3
+    make_img(aitk / "datasets" / "y" / "4_flip.png")
+
+    r = client.get("/api/compare", params={"a": "x", "b": "y"}).json()
+    assert [p["key"] for p in r["paired"]] == ["2", "3"]
+    assert [i["path"] for i in r["only_a"]] == ["1.png"]
+    assert r["only_b"] == []
+
+    r = client.post("/api/compare/delete-unpaired", json={"a": "x", "b": "y", "side": "a"}).json()
+    assert r == {"deleted": {"a": 1, "b": 0}, "flips_deleted": {"a": 1, "b": 0}}
+    x = aitk / "datasets" / "x"
+    assert not (x / "1_flip.png").exists() and not (x / "1_flip.txt").exists()
+
+    r = client.post("/api/datasets/x/delete-items", json={"paths": ["2.png"], "with_flips": True}).json()
+    assert r == {"deleted": 1, "flips_deleted": 1}
+    assert sorted(p.name for p in x.iterdir()) == ["3.png", "3.txt", "3_flip.png", "3_flip.txt"]
+
+    # Without with_flips (dataset page) the flip stays.
+    r = client.post("/api/datasets/x/delete-items", json={"paths": ["3.png"]}).json()
+    assert r == {"deleted": 1, "flips_deleted": 0}
+    assert (x / "3_flip.png").exists()

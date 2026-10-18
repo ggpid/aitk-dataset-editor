@@ -99,8 +99,11 @@ export const api = {
   },
   setCaption: (name: string, path: string, caption: string) =>
     request<{ ok: boolean }>('PUT', `${ds(name)}/caption`, { path, caption }),
-  deleteItems: (name: string, paths: string[]) =>
-    request<{ deleted: number }>('POST', `${ds(name)}/delete-items`, { paths }),
+  deleteItems: (name: string, paths: string[], withFlips = false) =>
+    request<{ deleted: number; flips_deleted: number }>('POST', `${ds(name)}/delete-items`, {
+      paths,
+      with_flips: withFlips,
+    }),
   addFlips: (name: string) =>
     request<{ created: string[]; skipped: string[]; unsupported: string[] }>('POST', `${ds(name)}/flip`),
   removeFlips: (name: string) => request<{ removed: string[] }>('DELETE', `${ds(name)}/flip`),
@@ -113,7 +116,11 @@ export const api = {
     side: 'a' | 'b' | 'both'
     paths_a?: string[]
     paths_b?: string[]
-  } & CompareOptions) => request<{ deleted: { a: number; b: number } }>('POST', '/api/compare/delete-unpaired', body),
+  } & CompareOptions) => request<{ deleted: { a: number; b: number }; flips_deleted: { a: number; b: number } }>(
+      'POST',
+      '/api/compare/delete-unpaired',
+      body,
+    ),
 }
 
 export const fileUrl = (dataset: string, item: Item) =>

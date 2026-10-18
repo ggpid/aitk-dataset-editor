@@ -9,6 +9,9 @@ import { errorText, Spinner, useIncremental, useUi } from '../ui'
 
 type Tab = 'paired' | 'only_a' | 'only_b'
 
+const deletedText = (a: number, b: number, flips: number) =>
+  `삭제 완료 — A: ${a}개, B: ${b}개${flips ? ` (+ _flip ${flips}개)` : ''}`
+
 export default function ComparePage() {
   const { toast, confirm } = useUi()
   const [params, setParams] = useSearchParams()
@@ -107,7 +110,9 @@ export default function ComparePage() {
               B <b>{b}</b>: {countB}개
             </li>
           )}
-          <li className="muted">이미지와 캡션(.txt)이 함께 영구 삭제됩니다.</li>
+          <li className="muted">
+            이미지와 캡션(.txt), 그리고 같은 이름의 <code>_flip</code> 파일까지 함께 영구 삭제됩니다.
+          </li>
         </ul>
       ),
       confirmText: '삭제',
@@ -123,7 +128,7 @@ export default function ComparePage() {
         paths_a: selection?.a,
         paths_b: selection?.b,
       })
-      toast(`삭제 완료 — A: ${r.deleted.a}개, B: ${r.deleted.b}개`, 'success')
+      toast(deletedText(r.deleted.a, r.deleted.b, r.flips_deleted.a + r.flips_deleted.b), 'success')
       load()
     } catch (e) {
       toast(errorText(e), 'error')
@@ -165,7 +170,9 @@ export default function ComparePage() {
             <b>{sideText}</b> 에서 삭제합니다.
           </li>
           {side !== 'both' && <li>남은 쪽은 짝없음 데이터가 됩니다.</li>}
-          <li className="muted">이미지와 캡션(.txt)이 함께 영구 삭제됩니다.</li>
+          <li className="muted">
+            이미지와 캡션(.txt), 그리고 같은 이름의 <code>_flip</code> 파일까지 함께 영구 삭제됩니다.
+          </li>
         </ul>
       ),
       confirmText: '삭제',
@@ -175,9 +182,18 @@ export default function ComparePage() {
     try {
       let da = 0
       let db = 0
-      if (side !== 'b') da = (await api.deleteItems(a, targets.map((p) => p.a.path))).deleted
-      if (side !== 'a') db = (await api.deleteItems(b, targets.map((p) => p.b.path))).deleted
-      toast(`삭제 완료 — A: ${da}개, B: ${db}개`, 'success')
+      let flips = 0
+      if (side !== 'b') {
+        const r = await api.deleteItems(a, targets.map((p) => p.a.path), true)
+        da = r.deleted
+        flips += r.flips_deleted
+      }
+      if (side !== 'a') {
+        const r = await api.deleteItems(b, targets.map((p) => p.b.path), true)
+        db = r.deleted
+        flips += r.flips_deleted
+      }
+      toast(deletedText(da, db, flips), 'success')
       await load()
       return true
     } catch (e) {
@@ -239,7 +255,7 @@ export default function ComparePage() {
       </div>
 
       {!a || !b ? (
-        <div className="empty">비교할 데이터셋 두 개를 선택하세요. 파일명(확장자 제외)이 같으면 짝으로 봅니다.</div>
+        <div className="empty">비교할 데이터셋 두 개를 선택하세요. 파일명(확장자 제외)이 같으면 짝으로 봅니다. _flip 파일은 비교에서 제외됩니다.</div>
       ) : loading && !result ? (
         <Spinner />
       ) : result ? (

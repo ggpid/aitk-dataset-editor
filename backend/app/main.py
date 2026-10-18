@@ -116,11 +116,16 @@ def set_caption(name: str, body: CaptionBody):
 
 class PathsBody(BaseModel):
     paths: list[str]
+    # Also delete each item's <stem>_flip.* companion (used by the compare view).
+    with_flips: bool = False
 
 
 @app.post("/api/datasets/{name}/delete-items")
 def delete_items(name: str, body: PathsBody):
-    return {"deleted": store().delete_items(name, body.paths)}
+    if body.with_flips:
+        deleted, flips = store().delete_items_with_flips(name, body.paths)
+        return {"deleted": deleted, "flips_deleted": flips}
+    return {"deleted": store().delete_items(name, body.paths), "flips_deleted": 0}
 
 
 @app.post("/api/datasets/{name}/flip")
@@ -180,6 +185,7 @@ def delete_unpaired(body: DeleteUnpairedBody):
     s = store()
     result = compare(s.list_items(body.a), s.list_items(body.b), body.ignore_case, body.ignore_folders)
     deleted = {"a": 0, "b": 0}
+    flips = {"a": 0, "b": 0}
     for side, ds, items, only in (
         ("a", body.a, result["only_a"], body.paths_a),
         ("b", body.b, result["only_b"], body.paths_b),
@@ -190,8 +196,8 @@ def delete_unpaired(body: DeleteUnpairedBody):
         if only is not None:
             allowed = set(only)
             targets = [t for t in targets if t in allowed]
-        deleted[side] = s.delete_items(ds, targets)
-    return {"deleted": deleted}
+        deleted[side], flips[side] = s.delete_items_with_flips(ds, targets)
+    return {"deleted": deleted, "flips_deleted": flips}
 
 
 # ---- frontend -----------------------------------------------------------

@@ -245,6 +245,26 @@ class DatasetStore:
     def delete_items(self, dataset: str, rels: list[str]) -> int:
         return sum(1 for rel in rels if self.delete_item(dataset, rel))
 
+    def flip_companions(self, dataset: str, rel: str) -> list[str]:
+        """Existing ``<stem>_flip.*`` media files that belong to ``rel``."""
+        ds = self.dataset_dir(dataset)
+        media = self.item_path(dataset, rel)
+        if is_flip_stem(media.stem):
+            return []
+        found = []
+        for ext in [media.suffix, *sorted(MEDIA_EXTS)]:
+            cand = media.with_name(f"{media.stem}{FLIP_SUFFIX}{ext}")
+            if cand.is_file():
+                r = cand.relative_to(ds).as_posix()
+                if r not in found:
+                    found.append(r)
+        return found
+
+    def delete_items_with_flips(self, dataset: str, rels: list[str]) -> tuple[int, int]:
+        """Delete items plus their ``_flip`` companions. Returns (items, flips) deleted."""
+        flips = [f for rel in rels for f in self.flip_companions(dataset, rel)]
+        return self.delete_items(dataset, rels), self.delete_items(dataset, flips)
+
     # ---- flip ---------------------------------------------------------
     def add_flips(self, dataset: str) -> dict:
         ds = self.dataset_dir(dataset)
@@ -318,6 +338,9 @@ def pair_key(item: Item, ignore_case: bool, ignore_folders: bool) -> str:
 def compare(
     a_items: list[Item], b_items: list[Item], ignore_case: bool = False, ignore_folders: bool = False
 ) -> dict:
+    # _flip files are derived data: leave them out of the comparison entirely.
+    a_items = [it for it in a_items if not it.is_flip]
+    b_items = [it for it in b_items if not it.is_flip]
     def index(items: list[Item]) -> dict[str, Item]:
         out: dict[str, Item] = {}
         for it in items:
