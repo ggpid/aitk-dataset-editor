@@ -4,7 +4,7 @@ import { CaptionEditor, useArrowKeys } from './components'
 import { Modal } from './ui'
 import { useZoom, ZoomBadge, ZoomPane } from './zoom'
 
-type Mode = 'side' | 'overlay' | 'swipe' | 'diff' | 'blink'
+type Mode = 'side' | 'overlay' | 'swipe' | 'diff' | 'blink' | 'a' | 'b'
 type Fit = 'stretch' | 'contain'
 
 const MODES: [Mode, string][] = [
@@ -13,6 +13,8 @@ const MODES: [Mode, string][] = [
   ['swipe', '슬라이더'],
   ['diff', '차이'],
   ['blink', '깜빡임'],
+  ['a', 'A만'],
+  ['b', 'B만'],
 ]
 
 const MODE_KEY = 'aitk-editor.overlay'
@@ -104,6 +106,10 @@ export default function OverlayViewer({
   if (mode === 'swipe') topStyle.clipPath = `inset(0 0 0 ${swipe}%)`
   if (mode === 'diff') topStyle.mixBlendMode = 'difference'
   if (mode === 'blink') topStyle.opacity = blinkB ? 1 : 0
+  if (mode === 'a') topStyle.opacity = 0
+  // B만: hide A so nothing shows through B's letterbox when not stretched.
+  const baseStyle: CSSProperties | undefined = mode === 'b' ? { visibility: 'hidden' } : undefined
+  const showing = mode === 'a' ? 'a' : mode === 'b' ? 'b' : mode === 'blink' ? (blinkB ? 'b' : 'a') : null
 
   return (
     <Modal onClose={onClose} wide>
@@ -201,6 +207,7 @@ export default function OverlayViewer({
                 dataset={a}
                 item={pair.a}
                 className="ov-base"
+                style={baseStyle}
                 onSize={(s) => setSizes((v) => ({ ...v, a: s }))}
               />
               <FullMedia
@@ -217,9 +224,7 @@ export default function OverlayViewer({
                   <span className="side-badge side-b floating right">B</span>
                 </>
               )}
-              {mode === 'blink' && (
-                <span className={`side-badge side-${blinkB ? 'b' : 'a'} floating`}>{blinkB ? 'B' : 'A'}</span>
-              )}
+              {showing && <span className={`side-badge side-${showing} floating`}>{showing.toUpperCase()}</span>}
             </div>
             </ZoomPane>
           )}
@@ -257,7 +262,7 @@ export default function OverlayViewer({
             ))}
           </div>
           <div className="row">
-            <small className="muted">←/→ 이동 · 1~5 보기 모드 · 휠 확대/축소, 드래그 이동, 더블클릭·0 원래 크기 · Esc 닫기</small>
+            <small className="muted">←/→ 이동 · 1~7 보기 모드 · 휠 확대/축소, 드래그 이동, 더블클릭·0 원래 크기 · Esc 닫기</small>
             <div className="spacer" />
             <span className="muted small">이 짝 삭제:</span>
             <button className="danger ghost" onClick={() => onDelete('a')}>
