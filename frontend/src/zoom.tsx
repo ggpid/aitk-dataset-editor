@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
 const MIN = 1
 const MAX = 32
@@ -147,13 +147,31 @@ export function useZoom(resetKey: unknown, leftPan = true): Zoom {
 }
 
 /** A clipped area whose content follows the shared zoom transform. */
+/** Show hard pixel edges only once one source pixel covers this many screen pixels. */
+const PIXELATE_AT = 2
+
 export function ZoomPane({ zoom, children, className }: { zoom: Zoom; children: ReactNode; className?: string }) {
   const { s, x, y } = zoom.view
   const zoomed = s > 1
+  const content = useRef<HTMLDivElement>(null)
+
+  // The CSS zoom level alone says nothing about how big a source pixel is on screen:
+  // a 2000px image fitted into 400px is still downscaled at 400%. Decide per image from
+  // its real magnification so large images keep smooth (not nearest-neighbour) sampling.
+  const updateSampling = useCallback(() => {
+    content.current?.querySelectorAll('img').forEach((img) => {
+      const mag = img.naturalWidth ? (s * img.clientWidth) / img.naturalWidth : 0
+      img.style.imageRendering = mag >= PIXELATE_AT ? 'pixelated' : ''
+    })
+  }, [s])
+  useLayoutEffect(updateSampling)
+
   return (
     <div className={`zoom-pane ${zoomed ? 'zoomed' : ''} ${zoom.panning ? 'panning' : ''} ${className ?? ''}`}>
       <div
-        className={`zoom-content ${s >= 4 ? 'pixelated' : ''}`}
+        ref={content}
+        onLoadCapture={updateSampling}
+        className="zoom-content"
         style={
           {
             transform: zoomed ? `translate(${x}px, ${y}px) scale(${s})` : undefined,
