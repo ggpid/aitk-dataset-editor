@@ -2,8 +2,16 @@
 # Build the frontend (first run / when sources change) and start the server.
 set -e
 cd "$(dirname "$0")"
-if [ ! -d frontend/dist ] || [ -n "$(find frontend/src frontend/index.html -newer frontend/dist -print -quit 2>/dev/null)" ]; then
-  (cd frontend && { [ -d node_modules ] || npm install; } && npm run build)
+cd frontend
+# (Re)install when node_modules is missing or older than the lockfile (e.g. after git pull).
+if [ ! -f node_modules/.package-lock.json ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+  rm -rf node_modules
+  npm install
+  rm -rf dist
 fi
-cd backend
+if [ ! -d dist ] || [ -n "$(find src index.html package.json -newer dist -print -quit 2>/dev/null)" ]; then
+  npm run build
+  touch dist
+fi
+cd ../backend
 exec uv run python -m app

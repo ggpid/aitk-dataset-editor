@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -15,12 +14,14 @@
     "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
-    "@types/node": "^24.13.3",
+    "@types/node": "^20.19.43",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
-    "@vitejs/plugin-react": "^6.1.1",
-    "oxlint": "^1.81.0",
-    "typescript": "~6.0.2",
-    "vite": "^8.3.0"
+    "@vitejs/plugin-react": "^4.7.0",
+    "typescript": "~5.9.3",
+    "vite": "^6.4.4"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

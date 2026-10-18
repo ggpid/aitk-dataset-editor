@@ -8,7 +8,7 @@ ai-toolkit UI 와 같은 폴더/파일 규칙(이미지 + 같은 이름의 `.txt
 
 ## 실행
 
-필요: [uv](https://docs.astral.sh/uv/), Node.js 18+
+필요: [uv](https://docs.astral.sh/uv/), Node.js 20+ (프론트엔드 빌드용)
 
 ```bash
 ./run.sh          # Windows: run.bat

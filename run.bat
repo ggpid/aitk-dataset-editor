@@ -1,10 +1,10 @@
 @echo off
 cd /d "%~dp0"
-if not exist frontend\dist (
-  pushd frontend
-  if not exist node_modules call npm install
-  call npm run build
-  popd
+pushd frontend
+if not exist dist (
+  call npm install || exit /b 1
+  call npm run build || exit /b 1
 )
+popd
 cd backend
 uv run python -m app
