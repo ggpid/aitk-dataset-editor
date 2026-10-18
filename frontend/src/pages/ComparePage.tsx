@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api, type CompareResult, type DatasetSummary, type Item, type Pair } from '../api'
 import { CaptionEditor, Media } from '../components'
 import OverlayViewer from '../OverlayViewer'
+import PairGrid from '../PairGrid'
 import { errorText, Spinner, useIncremental, useUi } from '../ui'
 
 type Tab = 'paired' | 'only_a' | 'only_b'
@@ -21,6 +22,22 @@ export default function ComparePage() {
   const [selB, setSelB] = useState<Set<string>>(new Set())
   const [viewing, setViewing] = useState<number | null>(null)
   const [search, setSearch] = useState('')
+  const [pairView, setPairView] = useState<'list' | 'grid'>(() => {
+    try {
+      return localStorage.getItem('aitk-editor.pairview') === 'grid' ? 'grid' : 'list'
+    } catch {
+      return 'list'
+    }
+  })
+
+  const changePairView = (v: 'list' | 'grid') => {
+    setPairView(v)
+    try {
+      localStorage.setItem('aitk-editor.pairview', v)
+    } catch {
+      /* ignore */
+    }
+  }
 
   const setParam = (k: string, v: string) =>
     setParams(
@@ -199,7 +216,24 @@ export default function ComparePage() {
           </div>
 
           {tab === 'paired' && (
-            <PairedList a={a} b={b} pairs={paired} onOpen={setViewing} onCaption={updatePairCaption} />
+            <>
+              <div className="row pair-view-switch">
+                <span className="muted small">보기:</span>
+                <div className="segmented">
+                  <button className={pairView === 'list' ? 'active' : ''} onClick={() => changePairView('list')}>
+                    나란히 (캡션 편집)
+                  </button>
+                  <button className={pairView === 'grid' ? 'active' : ''} onClick={() => changePairView('grid')}>
+                    겹침 그리드
+                  </button>
+                </div>
+              </div>
+              {pairView === 'grid' ? (
+                <PairGrid a={a} b={b} pairs={paired} onOpen={setViewing} />
+              ) : (
+                <PairedList a={a} b={b} pairs={paired} onOpen={setViewing} onCaption={updatePairCaption} />
+              )}
+            </>
           )}
           {tab === 'only_a' && (
             <UnpairedGrid
