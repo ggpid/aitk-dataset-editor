@@ -1,0 +1,23 @@
+[project]
+name = "aitk-dataset-editor"
+version = "0.1.0"
+description = "Dataset editor companion for ai-toolkit"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "pillow>=10.0",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.29",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
