@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { fileUrl, type Item, type Pair } from './api'
 import { CaptionEditor, useArrowKeys } from './components'
 import { Modal } from './ui'
+import { useZoom, ZoomBadge, ZoomPane } from './zoom'
 
 type Mode = 'side' | 'overlay' | 'swipe' | 'diff' | 'blink'
 type Fit = 'stretch' | 'contain'
@@ -55,6 +56,8 @@ export default function OverlayViewer({
   const [sizes, setSizes] = useState<{ a?: [number, number]; b?: [number, number] }>({})
   const dragging = useRef(false)
   const stage = useRef<HTMLDivElement>(null)
+  // In swipe mode a plain left-drag moves the divider; pan with Space+drag or middle-drag.
+  const zoom = useZoom(pair.key, mode !== 'swipe')
 
   useEffect(() => {
     try {
@@ -159,7 +162,7 @@ export default function OverlayViewer({
           </button>
         </div>
 
-        <div className="ov-main">
+        <div className="ov-main" ref={zoom.containerRef}>
           <button className="nav prev" onClick={prev} disabled={index === 0}>
             ‹
           </button>
@@ -167,11 +170,13 @@ export default function OverlayViewer({
             <div className="ov-side">
               {(['a', 'b'] as const).map((side) => (
                 <figure key={side}>
-                  <FullMedia
-                    dataset={side === 'a' ? a : b}
-                    item={pair[side]}
-                    onSize={(s) => setSizes((v) => ({ ...v, [side]: s }))}
-                  />
+                  <ZoomPane zoom={zoom}>
+                    <FullMedia
+                      dataset={side === 'a' ? a : b}
+                      item={pair[side]}
+                      onSize={(s) => setSizes((v) => ({ ...v, [side]: s }))}
+                    />
+                  </ZoomPane>
                   <figcaption>
                     <span className={`side-badge side-${side}`}>{side.toUpperCase()}</span>
                   </figcaption>
@@ -179,11 +184,12 @@ export default function OverlayViewer({
               ))}
             </div>
           ) : (
+            <ZoomPane zoom={zoom}>
             <div
               ref={stage}
               className={`ov-stage ${mode === 'swipe' ? 'swiping' : ''}`}
               onMouseDown={(e) => {
-                if (mode !== 'swipe') return
+                if (mode !== 'swipe' || e.button !== 0 || zoom.spaceHeld()) return
                 dragging.current = true
                 moveSwipe(e.clientX)
               }}
@@ -215,7 +221,9 @@ export default function OverlayViewer({
                 <span className={`side-badge side-${blinkB ? 'b' : 'a'} floating`}>{blinkB ? 'B' : 'A'}</span>
               )}
             </div>
+            </ZoomPane>
           )}
+          <ZoomBadge zoom={zoom} hint={mode === 'swipe' ? '휠 확대 · Space+드래그 이동' : '휠로 확대'} />
           <button className="nav next" onClick={next} disabled={index === pairs.length - 1}>
             ›
           </button>
@@ -249,7 +257,7 @@ export default function OverlayViewer({
             ))}
           </div>
           <div className="row">
-            <small className="muted">←/→ 이동 · 1~5 보기 모드 · Esc 닫기</small>
+            <small className="muted">←/→ 이동 · 1~5 보기 모드 · 휠 확대/축소, 드래그 이동, 더블클릭·0 원래 크기 · Esc 닫기</small>
             <div className="spacer" />
             <span className="muted small">이 짝 삭제:</span>
             <button className="danger ghost" onClick={() => onDelete('a')}>

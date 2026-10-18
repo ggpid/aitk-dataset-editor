@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { api, type Item } from '../api'
 import { CaptionEditor, Media, useArrowKeys } from '../components'
 import { errorText, formatBytes, Modal, Spinner, useIncremental, useUi } from '../ui'
+import { useZoom, ZoomBadge, ZoomPane } from '../zoom'
 
 type Filter = 'all' | 'original' | 'flip' | 'nocaption'
 
@@ -321,14 +322,18 @@ function Lightbox({
   const prev = useCallback(() => setIndex(Math.max(0, index - 1)), [index, setIndex])
   const next = useCallback(() => setIndex(Math.min(items.length - 1, index + 1)), [index, items.length, setIndex])
   useArrowKeys(prev, next)
+  const zoom = useZoom(it.path)
   return (
     <Modal onClose={onClose} wide>
       <div className="lightbox">
-        <div className="lightbox-media">
+        <div className="lightbox-media" ref={zoom.containerRef}>
           <button className="nav prev" onClick={prev} disabled={index === 0}>
             ‹
           </button>
-          <Media dataset={dataset} item={it} full />
+          <ZoomPane zoom={zoom}>
+            <Media dataset={dataset} item={it} full />
+          </ZoomPane>
+          <ZoomBadge zoom={zoom} hint="휠로 확대" />
           <button className="nav next" onClick={next} disabled={index === items.length - 1}>
             ›
           </button>
@@ -344,7 +349,7 @@ function Lightbox({
             {index + 1} / {items.length} · {formatBytes(it.size)}
           </div>
           <CaptionEditor dataset={dataset} item={it} rows={10} onSaved={(c) => onCaption(it.path, c)} />
-          <small className="muted">Ctrl+Enter 또는 포커스 해제 시 저장 · ←/→ 이동 · Esc 닫기</small>
+          <small className="muted">Ctrl+Enter 또는 포커스 해제 시 저장 · ←/→ 이동 · 휠 확대/축소, 드래그 이동, 더블클릭·0 원래 크기 · Esc 닫기</small>
           <div className="spacer" />
           <button className="danger" onClick={() => onDelete(it)}>
             이 항목 삭제
