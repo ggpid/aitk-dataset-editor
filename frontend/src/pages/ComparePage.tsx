@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, type CompareResult, type DatasetSummary, type Item, type Pair } from '../api'
 import { CaptionEditor, Media } from '../components'
+import DatasetCombo from '../DatasetCombo'
 import OverlayViewer from '../OverlayViewer'
 import PairGrid from '../PairGrid'
 import { errorText, Spinner, useIncremental, useUi } from '../ui'
@@ -382,17 +383,10 @@ function DatasetSelect({
   onChange: (v: string) => void
 }) {
   return (
-    <label className="ds-select">
+    <div className="ds-select">
       <span className={`side-badge side-${label.toLowerCase()}`}>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">— 선택 —</option>
-        {datasets.map((d) => (
-          <option key={d.name} value={d.name}>
-            {d.name} ({d.count})
-          </option>
-        ))}
-      </select>
-    </label>
+      <DatasetCombo value={value} datasets={datasets} onChange={onChange} />
+    </div>
   )
 }
 
