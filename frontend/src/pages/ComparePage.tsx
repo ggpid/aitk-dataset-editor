@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, type CompareResult, type DatasetSummary, type Item, type Pair } from '../api'
 import { CaptionEditor, Media } from '../components'
@@ -20,6 +20,8 @@ export default function ComparePage() {
   const [loading, setLoading] = useState(false)
   const [selA, setSelA] = useState<Set<string>>(new Set())
   const [selB, setSelB] = useState<Set<string>>(new Set())
+  const [selPairs, setSelPairs] = useState<Set<string>>(new Set())
+  const lastToggled = useRef<string | null>(null)
   const [viewing, setViewing] = useState<number | null>(null)
   const [search, setSearch] = useState('')
   const [pairView, setPairView] = useState<'list' | 'grid'>(() => {
@@ -64,6 +66,7 @@ export default function ComparePage() {
       setResult(await api.compare(a, b, opts))
       setSelA(new Set())
       setSelB(new Set())
+      setSelPairs(new Set())
     } catch (e) {
       toast(errorText(e), 'error')
       setResult(null)
@@ -123,6 +126,63 @@ export default function ComparePage() {
       load()
     } catch (e) {
       toast(errorText(e), 'error')
+    }
+  }
+
+  const togglePair = (key: string, shift: boolean) => {
+    setSelPairs((prev) => {
+      const next = new Set(prev)
+      const last = lastToggled.current
+      // Shift+click selects the range between the last toggled pair and this one.
+      if (shift && last && last !== key) {
+        const i1 = paired.findIndex((p) => p.key === last)
+        const i2 = paired.findIndex((p) => p.key === key)
+        if (i1 >= 0 && i2 >= 0) {
+          const [s, t] = i1 < i2 ? [i1, i2] : [i2, i1]
+          paired.slice(s, t + 1).forEach((p) => next.add(p.key))
+          lastToggled.current = key
+          return next
+        }
+      }
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      lastToggled.current = key
+      return next
+    })
+  }
+
+  const deletePairs = async (keys: string[], side: 'a' | 'b' | 'both') => {
+    if (!result || !keys.length) return false
+    const wanted = new Set(keys)
+    const targets = result.paired.filter((p) => wanted.has(p.key))
+    const sideText = side === 'a' ? `A (${a})` : side === 'b' ? `B (${b})` : `A (${a}) 와 B (${b}) 양쪽`
+    const ok = await confirm({
+      title: `짝있는 데이터 ${targets.length}쌍 삭제`,
+      message: (
+        <ul className="plain">
+          <li>
+            <b>{sideText}</b> 에서 삭제합니다.
+          </li>
+          {side !== 'both' && <li>남은 쪽은 짝없음 데이터가 됩니다.</li>}
+          <li className="muted">이미지와 캡션(.txt)이 함께 영구 삭제됩니다.</li>
+        </ul>
+      ),
+      confirmText: '삭제',
+      danger: true,
+    })
+    if (!ok) return false
+    try {
+      let da = 0
+      let db = 0
+      if (side !== 'b') da = (await api.deleteItems(a, targets.map((p) => p.a.path))).deleted
+      if (side !== 'a') db = (await api.deleteItems(b, targets.map((p) => p.b.path))).deleted
+      toast(`삭제 완료 — A: ${da}개, B: ${db}개`, 'success')
+      await load()
+      return true
+    } catch (e) {
+      toast(errorText(e), 'error')
+      await load()
+      return false
     }
   }
 
@@ -227,11 +287,40 @@ export default function ComparePage() {
                     겹침 그리드
                   </button>
                 </div>
+                <div className="spacer" />
+                {selPairs.size > 0 ? (
+                  <>
+                    <span>{selPairs.size}쌍 선택</span>
+                    <button onClick={() => setSelPairs(new Set())}>선택 해제</button>
+                    <span className="muted small">선택 삭제:</span>
+                    <button className="danger ghost" onClick={() => deletePairs([...selPairs], 'a')}>
+                      A만
+                    </button>
+                    <button className="danger ghost" onClick={() => deletePairs([...selPairs], 'b')}>
+                      B만
+                    </button>
+                    <button className="danger" onClick={() => deletePairs([...selPairs], 'both')}>
+                      둘다
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={() => setSelPairs(new Set(paired.map((p) => p.key)))} disabled={!paired.length}>
+                    보이는 짝 모두 선택
+                  </button>
+                )}
               </div>
               {pairView === 'grid' ? (
-                <PairGrid a={a} b={b} pairs={paired} onOpen={setViewing} />
+                <PairGrid a={a} b={b} pairs={paired} onOpen={setViewing} selected={selPairs} onToggle={togglePair} />
               ) : (
-                <PairedList a={a} b={b} pairs={paired} onOpen={setViewing} onCaption={updatePairCaption} />
+                <PairedList
+                  a={a}
+                  b={b}
+                  pairs={paired}
+                  onOpen={setViewing}
+                  onCaption={updatePairCaption}
+                  selected={selPairs}
+                  onToggle={togglePair}
+                />
               )}
             </>
           )}
@@ -267,6 +356,14 @@ export default function ComparePage() {
           setIndex={setViewing}
           onClose={() => setViewing(null)}
           onCaption={updatePairCaption}
+          onDelete={async (side) => {
+            const total = paired.length
+            if (await deletePairs([paired[viewing].key], side)) {
+              // The deleted pair drops out of the list; stay on the same position.
+              if (total <= 1) setViewing(null)
+              else if (viewing >= total - 1) setViewing(total - 2)
+            }
+          }}
         />
       )}
     </div>
@@ -305,21 +402,33 @@ function PairedList({
   pairs,
   onOpen,
   onCaption,
+  selected,
+  onToggle,
 }: {
   a: string
   b: string
   pairs: Pair[]
   onOpen: (i: number) => void
   onCaption: (side: 'a' | 'b', path: string, caption: string) => void
+  selected: Set<string>
+  onToggle: (key: string, shift: boolean) => void
 }) {
   const { visible, sentinel } = useIncremental(pairs, 60)
   if (!pairs.length) return <div className="empty">짝있는 데이터가 없습니다.</div>
   return (
     <div className="pairs">
       {visible.map((p, i) => (
-        <div key={p.key} className="pair">
+        <div key={p.key} className={`pair ${selected.has(p.key) ? 'selected' : ''}`}>
           <div className="pair-head">
-            <strong className="break">{p.key}</strong>
+            <input
+              type="checkbox"
+              checked={selected.has(p.key)}
+              onClick={(e) => onToggle(p.key, e.shiftKey)}
+              readOnly
+            />
+            <strong className="break pair-key" onClick={(e) => onToggle(p.key, e.shiftKey)}>
+              {p.key}
+            </strong>
             <span className="muted small">
               {p.a.ext} · {p.b.ext}
             </span>

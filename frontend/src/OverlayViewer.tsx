@@ -33,6 +33,7 @@ export default function OverlayViewer({
   setIndex,
   onClose,
   onCaption,
+  onDelete,
 }: {
   a: string
   b: string
@@ -41,6 +42,7 @@ export default function OverlayViewer({
   setIndex: (i: number) => void
   onClose: () => void
   onCaption: (side: 'a' | 'b', path: string, caption: string) => void
+  onDelete: (side: 'a' | 'b' | 'both') => void
 }) {
   const pair = pairs[index]
   const prefs = useRef(loadPrefs()).current
@@ -246,7 +248,20 @@ export default function OverlayViewer({
               </div>
             ))}
           </div>
-          <small className="muted">←/→ 이동 · 1~5 보기 모드 · Esc 닫기</small>
+          <div className="row">
+            <small className="muted">←/→ 이동 · 1~5 보기 모드 · Esc 닫기</small>
+            <div className="spacer" />
+            <span className="muted small">이 짝 삭제:</span>
+            <button className="danger ghost" onClick={() => onDelete('a')}>
+              A만
+            </button>
+            <button className="danger ghost" onClick={() => onDelete('b')}>
+              B만
+            </button>
+            <button className="danger" onClick={() => onDelete('both')}>
+              둘다
+            </button>
+          </div>
         </div>
       </div>
     </Modal>

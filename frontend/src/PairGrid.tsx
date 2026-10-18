@@ -40,11 +40,15 @@ export default function PairGrid({
   b,
   pairs,
   onOpen,
+  selected,
+  onToggle,
 }: {
   a: string
   b: string
   pairs: Pair[]
   onOpen: (i: number) => void
+  selected: Set<string>
+  onToggle: (key: string, shift: boolean) => void
 }) {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs)
   const [blinkB, setBlinkB] = useState(false)
@@ -136,6 +140,8 @@ export default function PairGrid({
             blinkB={blinkB}
             thumbSize={prefs.size > 300 ? 768 : 384}
             onOpen={() => onOpen(i)}
+            selected={selected.has(p.key)}
+            onToggle={(shift) => onToggle(p.key, shift)}
           />
         ))}
       </div>
@@ -154,6 +160,8 @@ function PairTile({
   blinkB,
   thumbSize,
   onOpen,
+  selected,
+  onToggle,
 }: {
   a: string
   b: string
@@ -164,6 +172,8 @@ function PairTile({
   blinkB: boolean
   thumbSize: number
   onOpen: () => void
+  selected: boolean
+  onToggle: (shift: boolean) => void
 }) {
   // A's aspect ratio sizes the stage so both layers share exactly the same box.
   const [ratio, setRatio] = useState(1)
@@ -180,7 +190,7 @@ function PairTile({
   const showing = mode === 'a' ? 'A' : mode === 'b' ? 'B' : mode === 'blink' ? (blinkB ? 'B' : 'A') : null
 
   return (
-    <div className="tile">
+    <div className={`tile ${selected ? 'selected' : ''}`}>
       <div className="tile-media" onClick={onOpen}>
         <div
           ref={stage}
@@ -203,10 +213,20 @@ function PairTile({
           <ThumbLayer dataset={b} pair={pair} side="b" size={thumbSize} style={style} />
           {mode === 'swipe' && <div className="swipe-line" style={{ left: `${pos}%` }} />}
         </div>
-        {showing && <span className={`side-badge side-${showing.toLowerCase()} floating`}>{showing}</span>}
+        <input
+          type="checkbox"
+          className="tile-check"
+          checked={selected}
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggle(e.shiftKey)
+          }}
+          readOnly
+        />
+        {showing && <span className={`side-badge side-${showing.toLowerCase()} floating right`}>{showing}</span>}
       </div>
       <div className="tile-body">
-        <div className="tile-name" title={pair.key}>
+        <div className="tile-name" title={pair.key} onClick={(e) => onToggle(e.shiftKey)} style={{ cursor: 'pointer' }}>
           {pair.key}
         </div>
       </div>
