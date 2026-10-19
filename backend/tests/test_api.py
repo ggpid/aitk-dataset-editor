@@ -144,3 +144,20 @@ def test_compare_ignores_flips_and_deletes_them(env):
     r = client.post("/api/datasets/x/delete-items", json={"paths": ["3.png"]}).json()
     assert r == {"deleted": 1, "flips_deleted": 0}
     assert (x / "3_flip.png").exists()
+
+
+def test_rename_dataset(env):
+    client, aitk = env
+    client.post("/api/datasets", json={"name": "cats"})
+    client.post("/api/datasets", json={"name": "dogs"})
+    make_img(aitk / "datasets" / "cats" / "a.png")
+    # Case, Korean, '-' and '.' are kept; unsafe characters become '_'.
+    r = client.patch("/api/datasets/cats", json={"name": "Cats-v2.고양이 / test"})
+    assert r.status_code == 200 and r.json()["name"] == "Cats-v2.고양이_test"
+    assert (aitk / "datasets" / "Cats-v2.고양이_test" / "a.png").is_file()
+    # Case-only rename works.
+    assert client.patch("/api/datasets/Cats-v2.고양이_test", json={"name": "CATS-V2.고양이_TEST"}).json()["name"] == "CATS-V2.고양이_TEST"
+    assert client.patch("/api/datasets/CATS-V2.고양이_TEST", json={"name": "dogs"}).status_code == 409
+    for bad in ["", "..", ".hidden", "///"]:
+        assert client.patch("/api/datasets/dogs", json={"name": bad}).status_code == 400, bad
+    assert client.patch("/api/datasets/nope", json={"name": "x"}).status_code == 404

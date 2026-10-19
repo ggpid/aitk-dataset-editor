@@ -1009,3 +1009,17 @@ main > .spinner {
 .ov-main > .zoom-pane {
   flex: 1;
 }
+.rename-btn {
+  font-size: 15px;
+  padding: 2px 8px;
+  color: var(--muted);
+  vertical-align: middle;
+}
+.rename-btn:hover {
+  color: var(--text);
+}
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

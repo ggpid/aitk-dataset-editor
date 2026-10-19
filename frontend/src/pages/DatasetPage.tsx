@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, type Item } from '../api'
 import { CaptionEditor, Media, useArrowKeys } from '../components'
+import RenameDialog from '../RenameDialog'
 import { errorText, formatBytes, Modal, Spinner, useIncremental, useUi } from '../ui'
 import { useZoom, ZoomBadge, ZoomPane } from '../zoom'
 
@@ -20,6 +21,8 @@ export default function DatasetPage() {
   const [busy, setBusy] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
+  const [renaming, setRenaming] = useState(false)
+  const navigate = useNavigate()
 
   const load = useCallback(async () => {
     try {
@@ -184,7 +187,10 @@ export default function DatasetPage() {
           <Link to="/" className="muted">
             데이터셋 /
           </Link>{' '}
-          {name}
+          {name}{' '}
+          <button className="ghost rename-btn" title="이름 변경" onClick={() => setRenaming(true)}>
+            ✎
+          </button>
         </h1>
         <div className="row">
           <button onClick={() => fileInput.current?.click()}>⬆ 업로드</button>
@@ -295,6 +301,16 @@ export default function DatasetPage() {
         <div className="busy">
           <Spinner /> {busy}
         </div>
+      )}
+      {renaming && (
+        <RenameDialog
+          name={name}
+          onClose={() => setRenaming(false)}
+          onRenamed={(n) => {
+            setRenaming(false)
+            navigate(`/datasets/${encodeURIComponent(n)}`, { replace: true })
+          }}
+        />
       )}
       {dragging && <div className="drop-overlay">여기에 놓으면 업로드됩니다</div>}
     </div>

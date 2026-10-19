@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, type DatasetSummary } from '../api'
+import RenameDialog from '../RenameDialog'
 import { errorText, Spinner, useUi } from '../ui'
 
 export default function DatasetsPage() {
@@ -10,6 +11,7 @@ export default function DatasetsPage() {
   const [error, setError] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
   const [filter, setFilter] = useState('')
+  const [renaming, setRenaming] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -53,17 +55,6 @@ export default function DatasetsPage() {
     }
   }
 
-  const rename = async (d: DatasetSummary) => {
-    const next = window.prompt('새 이름 (소문자/숫자/_ 로 정리됩니다)', d.name)
-    if (!next || next === d.name) return
-    try {
-      const { name } = await api.renameDataset(d.name, next)
-      toast(`'${d.name}' → '${name}'`, 'success')
-      load()
-    } catch (e) {
-      toast(errorText(e), 'error')
-    }
-  }
 
   if (error)
     return (
@@ -123,7 +114,7 @@ export default function DatasetsPage() {
                 </td>
                 <td className="num">{d.flip_count || '-'}</td>
                 <td className="actions">
-                  <button onClick={() => rename(d)}>이름 변경</button>
+                  <button onClick={() => setRenaming(d.name)}>이름 변경</button>
                   <button className="danger ghost" onClick={() => remove(d)}>
                     삭제
                   </button>
@@ -132,6 +123,16 @@ export default function DatasetsPage() {
             ))}
           </tbody>
         </table>
+      )}
+      {renaming && (
+        <RenameDialog
+          name={renaming}
+          onClose={() => setRenaming(null)}
+          onRenamed={() => {
+            setRenaming(null)
+            load()
+          }}
+        />
       )}
     </div>
   )

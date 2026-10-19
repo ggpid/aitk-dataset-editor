@@ -41,6 +41,14 @@ def clean_dataset_name(name: str) -> str:
     return cleaned
 
 
+def clean_rename_name(name: str) -> str:
+    """Folder name for a rename: keeps case, letters (incl. Korean), digits, '_', '-', '.'."""
+    cleaned = re.sub(r"[^\w.\-]+", "_", name.strip()).strip(" ")
+    if not cleaned or cleaned.startswith(".") or not cleaned.strip("_.-"):
+        raise DatasetError("유효하지 않은 데이터셋 이름입니다.")
+    return cleaned
+
+
 def clean_filename(name: str) -> str:
     base = os.path.basename(name.replace("\\", "/"))
     base = re.sub(r"[^\w.\-]", "_", base)
@@ -158,11 +166,20 @@ class DatasetStore:
 
     def rename_dataset(self, name: str, new_name: str) -> str:
         src = self.dataset_dir(name)
-        cleaned = clean_dataset_name(new_name)
+        cleaned = clean_rename_name(new_name)
+        if cleaned == name:
+            return name
         dst = self.dataset_dir(cleaned, must_exist=False)
-        if dst.exists():
+        # On case-insensitive filesystems (Windows/macOS) "cat" -> "Cat" points at the same folder.
+        same_folder = dst.exists() and os.path.samefile(src, dst)
+        if dst.exists() and not same_folder:
             raise DatasetError(f"이미 존재하는 데이터셋입니다: {cleaned}", 409)
-        src.rename(dst)
+        if same_folder:
+            tmp = self.dataset_dir(f"{cleaned}.renaming", must_exist=False)
+            src.rename(tmp)
+            tmp.rename(self.root / cleaned)
+        else:
+            src.rename(dst)
         return cleaned
 
     # ---- items --------------------------------------------------------
