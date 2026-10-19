@@ -182,6 +182,48 @@ class DatasetStore:
             src.rename(dst)
         return cleaned
 
+    def suggest_copy_name(self, name: str) -> str:
+        base = f"{name}_copy"
+        candidate, n = base, 2
+        while (self.root / candidate).exists():
+            candidate, n = f"{base}{n}", n + 1
+        return candidate
+
+    def duplicate_dataset(self, name: str, new_name: str, include_flips: bool = True) -> dict:
+        """Copy a dataset folder. Hidden entries and ai-toolkit cache folders (*_cache) are skipped."""
+        src = self.dataset_dir(name)
+        cleaned = clean_rename_name(new_name)
+        dst = self.dataset_dir(cleaned, must_exist=False)
+        if dst.exists():
+            raise DatasetError(f"이미 존재하는 데이터셋입니다: {cleaned}", 409)
+        skipped_flips = 0
+
+        def ignore(folder: str, names: list[str]) -> set[str]:
+            nonlocal skipped_flips
+            out = set()
+            for n in names:
+                full = os.path.join(folder, n)
+                if n.startswith(".") or (os.path.isdir(full) and n.endswith("_cache")):
+                    out.add(n)
+                elif not include_flips and os.path.isfile(full) and is_flip_stem(os.path.splitext(n)[0]):
+                    out.add(n)
+                    if os.path.splitext(n)[1].lower() in MEDIA_EXTS:
+                        skipped_flips += 1
+            return out
+
+        # Copy into a temporary folder first so a failed copy never leaves a half dataset behind.
+        tmp = self.root / f".{cleaned}.copying"
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        try:
+            shutil.copytree(src, tmp, ignore=ignore)
+            tmp.rename(dst)
+        except BaseException:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+        count = sum(1 for _ in self._iter_media(dst))
+        return {"name": cleaned, "count": count, "skipped_flips": skipped_flips}
+
     # ---- items --------------------------------------------------------
     def _iter_media(self, folder: Path):
         stack = [folder]

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, type DatasetSummary } from '../api'
+import DuplicateDialog from '../DuplicateDialog'
 import RenameDialog from '../RenameDialog'
 import { errorText, Spinner, useUi } from '../ui'
 
@@ -12,6 +13,7 @@ export default function DatasetsPage() {
   const [newName, setNewName] = useState('')
   const [filter, setFilter] = useState('')
   const [renaming, setRenaming] = useState<string | null>(null)
+  const [duplicating, setDuplicating] = useState<DatasetSummary | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -115,6 +117,7 @@ export default function DatasetsPage() {
                 <td className="num">{d.flip_count || '-'}</td>
                 <td className="actions">
                   <button onClick={() => setRenaming(d.name)}>이름 변경</button>
+                  <button onClick={() => setDuplicating(d)}>복제</button>
                   <button className="danger ghost" onClick={() => remove(d)}>
                     삭제
                   </button>
@@ -123,6 +126,17 @@ export default function DatasetsPage() {
             ))}
           </tbody>
         </table>
+      )}
+      {duplicating && (
+        <DuplicateDialog
+          name={duplicating.name}
+          hasFlips={duplicating.flip_count > 0}
+          onClose={() => setDuplicating(null)}
+          onDuplicated={() => {
+            setDuplicating(null)
+            load()
+          }}
+        />
       )}
       {renaming && (
         <RenameDialog

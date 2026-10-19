@@ -88,6 +88,12 @@ export const api = {
   listDatasets: () => request<DatasetSummary[]>('GET', '/api/datasets'),
   createDataset: (name: string) => request<{ name: string }>('POST', '/api/datasets', { name }),
   deleteDataset: (name: string) => request<{ ok: boolean }>('DELETE', ds(name)),
+  suggestDuplicateName: (name: string) => request<{ name: string }>('GET', `${ds(name)}/duplicate-name`),
+  duplicateDataset: (name: string, newName: string, includeFlips: boolean) =>
+    request<{ name: string; count: number; skipped_flips: number }>('POST', `${ds(name)}/duplicate`, {
+      name: newName,
+      include_flips: includeFlips,
+    }),
   renameDataset: (name: string, newName: string) =>
     request<{ name: string }>('PATCH', ds(name), { name: newName }),
 

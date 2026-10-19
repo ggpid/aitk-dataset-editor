@@ -91,6 +91,23 @@ def rename_dataset(name: str, body: NameBody):
     return {"name": store().rename_dataset(name, body.name)}
 
 
+class DuplicateBody(BaseModel):
+    name: str
+    include_flips: bool = True
+
+
+@app.get("/api/datasets/{name}/duplicate-name")
+def suggest_duplicate_name(name: str):
+    s = store()
+    s.dataset_dir(name)
+    return {"name": s.suggest_copy_name(name)}
+
+
+@app.post("/api/datasets/{name}/duplicate")
+async def duplicate_dataset(name: str, body: DuplicateBody):
+    return await run_in_threadpool(store().duplicate_dataset, name, body.name, body.include_flips)
+
+
 @app.get("/api/datasets/{name}/items")
 def list_items(name: str):
     return [i.to_dict() for i in store().list_items(name)]

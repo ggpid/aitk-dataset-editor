@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, type Item } from '../api'
 import { CaptionEditor, Media, useArrowKeys } from '../components'
+import DuplicateDialog from '../DuplicateDialog'
 import RenameDialog from '../RenameDialog'
 import { errorText, formatBytes, Modal, Spinner, useIncremental, useUi } from '../ui'
 import { useZoom, ZoomBadge, ZoomPane } from '../zoom'
@@ -22,6 +23,7 @@ export default function DatasetPage() {
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const [renaming, setRenaming] = useState(false)
+  const [duplicating, setDuplicating] = useState(false)
   const navigate = useNavigate()
 
   const load = useCallback(async () => {
@@ -193,6 +195,7 @@ export default function DatasetPage() {
           </button>
         </h1>
         <div className="row">
+          <button onClick={() => setDuplicating(true)}>⧉ 복제</button>
           <button onClick={() => fileInput.current?.click()}>⬆ 업로드</button>
           <input
             ref={fileInput}
@@ -301,6 +304,17 @@ export default function DatasetPage() {
         <div className="busy">
           <Spinner /> {busy}
         </div>
+      )}
+      {duplicating && (
+        <DuplicateDialog
+          name={name}
+          hasFlips={items.some((i) => i.is_flip)}
+          onClose={() => setDuplicating(false)}
+          onDuplicated={(n) => {
+            setDuplicating(false)
+            navigate(`/datasets/${encodeURIComponent(n)}`)
+          }}
+        />
       )}
       {renaming && (
         <RenameDialog

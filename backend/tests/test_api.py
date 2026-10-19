@@ -161,3 +161,30 @@ def test_rename_dataset(env):
     for bad in ["", "..", ".hidden", "///"]:
         assert client.patch("/api/datasets/dogs", json={"name": bad}).status_code == 400, bad
     assert client.patch("/api/datasets/nope", json={"name": "x"}).status_code == 404
+
+
+def test_duplicate_dataset(env):
+    client, aitk = env
+    client.post("/api/datasets", json={"name": "src"})
+    d = aitk / "datasets" / "src"
+    make_img(d / "a.png"); (d / "a.txt").write_text("cap a")
+    (d / "_controls").mkdir(); make_img(d / "_controls" / "a.png")
+    (d / "_latent_cache").mkdir(); (d / "_latent_cache" / "x.safetensors").write_bytes(b"0")
+    (d / ".DS_Store").write_bytes(b"0")
+    client.post("/api/datasets/src/flip")
+
+    assert client.get("/api/datasets/src/duplicate-name").json()["name"] == "src_copy"
+    r = client.post("/api/datasets/src/duplicate", json={"name": "src_copy"}).json()
+    assert r == {"name": "src_copy", "count": 2, "skipped_flips": 0}
+    c = aitk / "datasets" / "src_copy"
+    assert sorted(p.name for p in c.iterdir()) == ["_controls", "a.png", "a.txt", "a_flip.png", "a_flip.txt"]
+    assert (c / "a.txt").read_text() == "cap a"
+    assert client.get("/api/datasets/src/duplicate-name").json()["name"] == "src_copy2"
+
+    r = client.post("/api/datasets/src/duplicate", json={"name": "no flips", "include_flips": False}).json()
+    assert r == {"name": "no_flips", "count": 1, "skipped_flips": 1}
+    assert sorted(p.name for p in (aitk / "datasets" / "no_flips").iterdir()) == ["_controls", "a.png", "a.txt"]
+
+    assert client.post("/api/datasets/src/duplicate", json={"name": "src_copy"}).status_code == 409
+    assert client.post("/api/datasets/nope/duplicate", json={"name": "x"}).status_code == 404
+    assert not any(p.name.startswith(".") for p in (aitk / "datasets").iterdir())
