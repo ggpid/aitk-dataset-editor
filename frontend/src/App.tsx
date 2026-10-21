@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import { api, type Settings } from './api'
 import ComparePage from './pages/ComparePage'
+import ConvertPage from './pages/ConvertPage'
 import DatasetPage from './pages/DatasetPage'
 import DatasetsPage from './pages/DatasetsPage'
 import SettingsPage from './pages/SettingsPage'
@@ -28,6 +29,7 @@ export default function App() {
             데이터셋
           </NavLink>
           <NavLink to="/compare">비교</NavLink>
+          <NavLink to="/convert">변환</NavLink>
           <NavLink to="/settings">설정</NavLink>
         </nav>
         <div className="spacer" />
@@ -53,6 +55,7 @@ export default function App() {
               element={configured ? <DatasetPage /> : <Navigate to="/settings" replace />}
             />
             <Route path="/compare" element={configured ? <ComparePage /> : <Navigate to="/settings" replace />} />
+            <Route path="/convert" element={configured ? <ConvertPage /> : <Navigate to="/settings" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         )}

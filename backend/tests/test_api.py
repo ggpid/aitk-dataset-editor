@@ -285,3 +285,69 @@ def test_list_is_names_only_and_stats(env):
     }
     assert client.get("/api/datasets/empty/stats").json()["count"] == 0
     assert client.get("/api/datasets/nope/stats").status_code == 404
+
+
+def test_rle_matches_pycocotools():
+    import numpy as np
+    from pycocotools import mask as cocomask
+
+    from app.sam import encode_mask
+
+    rng = np.random.default_rng(0)
+    for shape in [(1, 1), (7, 5), (64, 48), (300, 211)]:
+        for p in (0.0, 0.05, 0.5, 1.0):
+            m = rng.random(shape) < p
+            ref = cocomask.encode(np.asfortranarray(m.astype(np.uint8)))
+            ours = encode_mask(m)
+            assert ours["counts"] == ref["counts"].decode(), (shape, p)
+            assert ours["size"] == list(ref["size"])
+            assert (cocomask.decode({"size": ours["size"], "counts": ours["counts"].encode()}) == m).all()
+
+
+def test_convert_birefnet_to_sam(env):
+    import json
+
+    import numpy as np
+    from pycocotools import mask as cocomask
+
+    client, aitk = env
+    d = aitk / "datasets" / "bire"
+    (d / "im").mkdir(parents=True)
+    (d / "gt").mkdir()
+    # a: two blobs, soft edge; b: png image + mask of a different size; c: empty mask; d: no mask
+    Image.new("RGB", (40, 30), "blue").save(d / "im" / "a.jpg")
+    m = np.zeros((30, 40), np.uint8); m[5:15, 5:15] = 255; m[20:28, 25:38] = 200; m[0, 0] = 100
+    Image.fromarray(m).save(d / "gt" / "a.png")
+    Image.new("RGBA", (20, 20), (0, 255, 0, 255)).save(d / "im" / "b.png")
+    mb = np.zeros((10, 10), np.uint8); mb[2:8, 2:8] = 255
+    Image.fromarray(mb).save(d / "gt" / "b.png")
+    Image.new("RGB", (10, 10)).save(d / "im" / "c.jpg")
+    Image.new("L", (10, 10), 0).save(d / "gt" / "c.png")
+    Image.new("RGB", (10, 10)).save(d / "im" / "d.jpg")
+
+    pv = client.post("/api/convert/sam/preview", json={"image_dataset": "bire"}).json()
+    assert pv["pairs"] == 3 and pv["images_without_mask"] == 1 and pv["suggested_output"] == "bire_sam"
+
+    r = wait(client, client.post("/api/convert/sam", json={"image_dataset": "bire", "output": "bire_sam", "split": True, "min_area": 4}))
+    assert r["written"] == 2 and r["empty_skipped"] == 1 and r["resized_masks"] == 1 and r["converted_to_jpg"] == 1
+    out = aitk / "datasets" / "bire_sam"
+    assert sorted(p.name for p in out.iterdir()) == ["a.jpg", "a.json", "b.jpg", "b.json"]
+
+    ja = json.loads((out / "a.json").read_text())
+    assert ja["image"] == {"image_id": 1, "width": 40, "height": 30, "file_name": "a.jpg"}
+    anns = ja["annotations"]
+    assert len(anns) == 2  # two blobs, the 1px 100-gray speck is below the threshold
+    assert sorted(a["bbox"] for a in anns) == [[5.0, 5.0, 10.0, 10.0], [25.0, 20.0, 13.0, 8.0]]
+    for a in anns:
+        dm = cocomask.decode({"size": a["segmentation"]["size"], "counts": a["segmentation"]["counts"].encode()})
+        assert dm.sum() == a["area"]
+        x, y = a["point_coords"][0]
+        assert dm[int(y), int(x)] == 1  # prompt point lies inside the object
+    jb = json.loads((out / "b.json").read_text())
+    assert jb["image"]["width"] == 20 and jb["annotations"][0]["bbox"] == [4.0, 4.0, 12.0, 12.0]
+
+    # whole-mask mode -> one annotation; existing output name refused
+    r = wait(client, client.post("/api/convert/sam", json={"image_dataset": "bire", "output": "bire_sam2"}))
+    assert json.loads((aitk / "datasets" / "bire_sam2" / "a.json").read_text())["annotations"].__len__() == 1
+    assert client.post("/api/convert/sam", json={"image_dataset": "bire", "output": "bire_sam"}).status_code == 409
+    assert client.post("/api/convert/sam/preview", json={"image_dataset": "bire", "mask_dir": "nope"}).status_code == 400

@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import config
+from . import config, sam
 from .datasets import IMAGE_EXTS, DatasetError, DatasetStore, clean_rename_name, compare
 from .jobs import jobs
 from .thumbs import thumbnail
@@ -216,6 +216,39 @@ async def get_thumb(name: str, path: str, size: int = 384):
     except OSError:
         return FileResponse(p)
     return FileResponse(out, media_type="image/webp", headers={"Cache-Control": "max-age=86400"})
+
+
+# ---- convert: BiRefNet -> SAM (SA-1B) -------------------------------------
+class SamBody(BaseModel):
+    image_dataset: str
+    mask_dataset: str | None = None
+    image_dir: str = "im"
+    mask_dir: str = "gt"
+    output: str = ""
+    threshold: int = 128
+    split: bool = False
+    min_area: int = 64
+    to_jpg: bool = True
+    skip_empty: bool = True
+
+
+@app.post("/api/convert/sam/preview")
+def sam_preview(body: SamBody):
+    return sam.preview(store(), sam.SamOptions(**body.model_dump()))
+
+
+@app.post("/api/convert/sam")
+def sam_convert(body: SamBody):
+    s = store()
+    opt = sam.SamOptions(**body.model_dump())
+    sam.sources(s, opt)  # validate before starting the job
+    out = clean_rename_name(opt.output)
+    if s.dataset_dir(out, must_exist=False).exists():
+        raise HTTPException(409, f"이미 존재하는 데이터셋입니다: {out}")
+    names = [n for n in (opt.image_dataset, opt.mask_dataset, out) if n]
+    return job_response(
+        jobs.start("convert_sam", f"'{opt.image_dataset}' → SAM 데이터셋 '{out}'", names, lambda j: sam.convert(s, opt, j))
+    )
 
 
 # ---- compare ------------------------------------------------------------

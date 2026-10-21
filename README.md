@@ -67,6 +67,15 @@ ai-toolkit UI 와 같은 폴더/파일 규칙(이미지 + 같은 이름의 `.txt
   (형식 유지, EXIF 회전 반영, ICC 프로필 유지, JPEG 품질 95. 영상/GIF 는 건너뜀)
 - **_flip 모두 제거**: 파일명이 `_flip` 으로 끝나는 모든 미디어와 캡션을 삭제합니다.
 
+### BiRefNet → SAM 데이터셋 변환 (변환 메뉴)
+- 입력: BiRefNet/DIS5K 형식 — 한 데이터셋 안의 `im/`(이미지) + `gt/`(같은 이름의 흑백 마스크) 폴더,
+  또는 이미지 데이터셋 + 마스크 데이터셋(파일 이름으로 짝)
+- 출력: SAM / SAM 2 학습용 **SA-1B 형식**의 새 데이터셋 — `이름.jpg` + `이름.json`
+  (`image{image_id,width,height,file_name}`, `annotations[{segmentation(COCO RLE), area, bbox, point_coords, crop_box, predicted_iou, stability_score}]`)
+- 옵션: 마스크 임계값(기본 128), 떨어진 영역을 별도 객체로 분리(+최소 면적), JPG 변환, 빈 마스크 제외
+- 프롬프트 점은 객체 안쪽에서 경계로부터 가장 먼 픽셀, 마스크 크기가 이미지와 다르면 이미지 크기에 맞춤
+- RLE 인코딩은 pycocotools 와 동일한 결과인지 테스트로 검증합니다. 원본 데이터셋은 바뀌지 않습니다.
+
 ## 참고
 - 썸네일은 `backend/.cache` 에 캐시되며 원본 데이터셋 폴더에는 아무것도 추가하지 않습니다.
 - 숨김 파일과 `_controls` 폴더는 ai-toolkit 과 마찬가지로 무시합니다.

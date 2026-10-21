@@ -68,6 +68,40 @@ export interface JobInfo<T = unknown> {
 
 export type JobStart<T> = Promise<{ job: JobInfo<T> }>
 
+export interface SamOptions {
+  image_dataset: string
+  mask_dataset: string | null
+  image_dir: string
+  mask_dir: string
+  output: string
+  threshold: number
+  split: boolean
+  min_area: number
+  to_jpg: boolean
+  skip_empty: boolean
+}
+
+export interface SamPreview {
+  images: number
+  masks: number
+  pairs: number
+  images_without_mask: number
+  masks_without_image: number
+  examples: string[]
+  suggested_output: string
+}
+
+export interface SamResult {
+  name: string
+  written: number
+  annotations: number
+  empty_skipped: number
+  resized_masks: number
+  converted_to_jpg: number
+  images_without_mask: number
+  masks_without_image: number
+}
+
 export class ApiError extends Error {
   status: number
   constructor(message: string, status: number) {
@@ -147,6 +181,9 @@ export const api = {
     paths_b?: string[]
   } & CompareOptions): JobStart<{ deleted: { a: number; b: number }; flips_deleted: { a: number; b: number } }> =>
     request('POST', '/api/compare/delete-unpaired', body),
+
+  samPreview: (o: SamOptions) => request<SamPreview>('POST', '/api/convert/sam/preview', o),
+  samConvert: (o: SamOptions): JobStart<SamResult> => request('POST', '/api/convert/sam', o),
 
   getJob: <T,>(id: string) => request<JobInfo<T>>('GET', `/api/jobs/${id}`),
   listJobs: (active = true) => request<JobInfo[]>('GET', `/api/jobs?active=${active}`),
