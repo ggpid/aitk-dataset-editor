@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, type Item } from '../api'
 import { CaptionEditor, Media, useArrowKeys } from '../components'
 import DuplicateDialog from '../DuplicateDialog'
+import { CancelledError, useJobs } from '../jobs'
 import RenameDialog from '../RenameDialog'
 import { errorText, formatBytes, Modal, Spinner, useIncremental, useUi } from '../ui'
 import { useZoom, ZoomBadge, ZoomPane } from '../zoom'
@@ -19,7 +20,8 @@ export default function DatasetPage() {
   const [thumb, setThumb] = useState(200)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [viewing, setViewing] = useState<number | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
+  const { runJob, runUpload, busyDatasets } = useJobs()
+  const busy = busyDatasets.has(name)
   const [dragging, setDragging] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const [renaming, setRenaming] = useState(false)
@@ -54,41 +56,70 @@ export default function DatasetPage() {
 
   const { visible, sentinel } = useIncremental(shown)
 
+  // Deleting can remove several shown items at once (original + _flip); keep the viewer in range.
+  useEffect(() => {
+    if (viewing === null) return
+    if (!shown.length) setViewing(null)
+    else if (viewing >= shown.length) setViewing(shown.length - 1)
+  }, [shown.length, viewing])
+
   const updateCaption = (path: string, caption: string) =>
     setItems((list) => list?.map((it) => (it.path === path ? { ...it, caption } : it)) ?? null)
 
-  const run = async (label: string, fn: () => Promise<void>) => {
-    setBusy(label)
+  // Progress is shown in the job panel; here we only report the outcome and refresh
+  // (also after a cancel or error, since part of the work may already be done).
+  const run = async (fn: () => Promise<void>) => {
     try {
       await fn()
     } catch (e) {
-      toast(errorText(e), 'error')
+      if (e instanceof CancelledError) toast('작업을 취소했습니다. 이미 처리된 파일은 그대로 남습니다.', 'info')
+      else toast(errorText(e), 'error')
     } finally {
-      setBusy(null)
+      await load()
     }
   }
 
   const upload = (files: File[]) =>
-    run('업로드 중…', async () => {
-      if (!files.length) return
-      const res = await api.upload(name, files)
-      toast(`${res.files.length}개 파일 업로드됨`, 'success')
-      await load()
+    files.length > 0 &&
+    run(async () => {
+      const saved = await runUpload(name, files)
+      toast(`${saved.length}개 파일 업로드됨`, 'success')
     })
 
+  /** Originals and their _flip copies are deleted together (a.png <-> a_flip.png). */
+  const linkedCount = (paths: string[]) => {
+    const wanted = new Set(paths)
+    const keys = new Set(items?.filter((i) => wanted.has(i.path)).map((i) => i.key))
+    const linked = new Set<string>()
+    for (const k of keys) {
+      const other = k.endsWith('_flip') ? k.slice(0, -'_flip'.length) : `${k}_flip`
+      if (other && !keys.has(other)) linked.add(other)
+    }
+    return items?.filter((i) => linked.has(i.key) && !wanted.has(i.path)).length ?? 0
+  }
+
   const deletePaths = async (paths: string[]) => {
+    const linked = linkedCount(paths)
     const ok = await confirm({
       title: `${paths.length}개 항목 삭제`,
-      message: '이미지와 캡션(.txt) 파일이 함께 삭제됩니다.',
+      message: (
+        <ul className="plain">
+          {linked > 0 && (
+            <li>
+              연결된 원본/<code>_flip</code> 항목 <b>{linked}개</b>도 함께 삭제됩니다 (총 {paths.length + linked}개).
+            </li>
+          )}
+          <li className="muted">이미지와 캡션(.txt) 파일이 함께 영구 삭제됩니다.</li>
+        </ul>
+      ),
       confirmText: '삭제',
       danger: true,
     })
     if (!ok) return false
-    await run('삭제 중…', async () => {
-      const r = await api.deleteItems(name, paths)
-      toast(`${r.deleted}개 삭제됨`, 'success')
+    await run(async () => {
+      const r = await runJob(() => api.deleteItems(name, paths, true))
+      toast(`${r.deleted}개 삭제됨${r.flips_deleted ? ` (+ 연결된 원본/_flip ${r.flips_deleted}개)` : ''}`, 'success')
       setSelected(new Set())
-      await load()
     })
     return true
   }
@@ -106,8 +137,8 @@ export default function DatasetPage() {
       confirmText: 'flip 추가',
     })
     if (!ok) return
-    run('flip 이미지 생성 중…', async () => {
-      const r = await api.addFlips(name)
+    run(async () => {
+      const r = await runJob(() => api.addFlips(name))
       const extra = [
         r.skipped.length ? `${r.skipped.length}개 이미 있음` : '',
         r.unsupported.length ? `${r.unsupported.length}개 미지원(영상 등)` : '',
@@ -115,7 +146,6 @@ export default function DatasetPage() {
         .filter(Boolean)
         .join(', ')
       toast(`${r.created.length}개 flip 생성${extra ? ` (${extra})` : ''}`, 'success')
-      await load()
     })
   }
 
@@ -128,10 +158,9 @@ export default function DatasetPage() {
       danger: true,
     })
     if (!ok) return
-    run('flip 제거 중…', async () => {
-      const r = await api.removeFlips(name)
+    run(async () => {
+      const r = await runJob(() => api.removeFlips(name))
       toast(`${r.removed.length}개 flip 제거됨`, 'success')
-      await load()
     })
   }
 
@@ -190,13 +219,17 @@ export default function DatasetPage() {
             데이터셋 /
           </Link>{' '}
           {name}{' '}
-          <button className="ghost rename-btn" title="이름 변경" onClick={() => setRenaming(true)}>
+          <button className="ghost rename-btn" title="이름 변경" onClick={() => setRenaming(true)} disabled={busy}>
             ✎
           </button>
         </h1>
         <div className="row">
-          <button onClick={() => setDuplicating(true)}>⧉ 복제</button>
-          <button onClick={() => fileInput.current?.click()}>⬆ 업로드</button>
+          <button onClick={() => setDuplicating(true)} disabled={busy}>
+            ⧉ 복제
+          </button>
+          <button onClick={() => fileInput.current?.click()} disabled={busy}>
+            ⬆ 업로드
+          </button>
           <input
             ref={fileInput}
             type="file"
@@ -208,8 +241,10 @@ export default function DatasetPage() {
               e.target.value = ''
             }}
           />
-          <button onClick={addFlips}>⇋ flip 추가</button>
-          <button className="danger ghost" onClick={removeFlips} disabled={!flipCount}>
+          <button onClick={addFlips} disabled={busy}>
+            ⇋ flip 추가
+          </button>
+          <button className="danger ghost" onClick={removeFlips} disabled={!flipCount || busy}>
             _flip 모두 제거
           </button>
         </div>
@@ -293,17 +328,8 @@ export default function DatasetPage() {
           setIndex={setViewing}
           onClose={() => setViewing(null)}
           onCaption={updateCaption}
-          onDelete={async (it) => {
-            if (await deletePaths([it.path])) {
-              if (viewing >= shown.length - 1) setViewing(shown.length > 1 ? viewing - 1 : null)
-            }
-          }}
+          onDelete={(it) => deletePaths([it.path])}
         />
-      )}
-      {busy && (
-        <div className="busy">
-          <Spinner /> {busy}
-        </div>
       )}
       {duplicating && (
         <DuplicateDialog

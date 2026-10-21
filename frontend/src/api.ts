@@ -45,6 +45,25 @@ export interface CompareOptions {
   ignore_folders: boolean
 }
 
+export interface JobInfo<T = unknown> {
+  id: string
+  kind: string
+  title: string
+  datasets: string[]
+  total: number
+  done: number
+  current: string
+  status: 'running' | 'done' | 'error' | 'cancelled'
+  result: T | null
+  error: string | null
+  started: number
+  finished: number | null
+  elapsed: number
+  cancel_requested: boolean
+}
+
+export type JobStart<T> = Promise<{ job: JobInfo<T> }>
+
 export class ApiError extends Error {
   status: number
   constructor(message: string, status: number) {
@@ -87,10 +106,14 @@ export const api = {
 
   listDatasets: () => request<DatasetSummary[]>('GET', '/api/datasets'),
   createDataset: (name: string) => request<{ name: string }>('POST', '/api/datasets', { name }),
-  deleteDataset: (name: string) => request<{ ok: boolean }>('DELETE', ds(name)),
+  deleteDataset: (name: string): JobStart<null> => request('DELETE', ds(name)),
   suggestDuplicateName: (name: string) => request<{ name: string }>('GET', `${ds(name)}/duplicate-name`),
-  duplicateDataset: (name: string, newName: string, includeFlips: boolean) =>
-    request<{ name: string; count: number; skipped_flips: number }>('POST', `${ds(name)}/duplicate`, {
+  duplicateDataset: (
+    name: string,
+    newName: string,
+    includeFlips: boolean,
+  ): JobStart<{ name: string; count: number; skipped_flips: number }> =>
+    request('POST', `${ds(name)}/duplicate`, {
       name: newName,
       include_flips: includeFlips,
     }),
@@ -98,21 +121,16 @@ export const api = {
     request<{ name: string }>('PATCH', ds(name), { name: newName }),
 
   listItems: (name: string) => request<Item[]>('GET', `${ds(name)}/items`),
-  upload: (name: string, files: File[]) => {
-    const form = new FormData()
-    files.forEach((f) => form.append('files', f, f.name))
-    return request<{ files: string[] }>('POST', `${ds(name)}/upload`, form)
-  },
   setCaption: (name: string, path: string, caption: string) =>
     request<{ ok: boolean }>('PUT', `${ds(name)}/caption`, { path, caption }),
-  deleteItems: (name: string, paths: string[], withFlips = false) =>
-    request<{ deleted: number; flips_deleted: number }>('POST', `${ds(name)}/delete-items`, {
+  deleteItems: (name: string, paths: string[], withFlips = false): JobStart<{ deleted: number; flips_deleted: number }> =>
+    request('POST', `${ds(name)}/delete-items`, {
       paths,
       with_flips: withFlips,
     }),
-  addFlips: (name: string) =>
-    request<{ created: string[]; skipped: string[]; unsupported: string[] }>('POST', `${ds(name)}/flip`),
-  removeFlips: (name: string) => request<{ removed: string[] }>('DELETE', `${ds(name)}/flip`),
+  addFlips: (name: string): JobStart<{ created: string[]; skipped: string[]; unsupported: string[] }> =>
+    request('POST', `${ds(name)}/flip`),
+  removeFlips: (name: string): JobStart<{ removed: string[] }> => request('DELETE', `${ds(name)}/flip`),
 
   compare: (a: string, b: string, opts: CompareOptions) =>
     request<CompareResult>('GET', `/api/compare?${qs({ a, b, ...opts })}`),
@@ -122,11 +140,88 @@ export const api = {
     side: 'a' | 'b' | 'both'
     paths_a?: string[]
     paths_b?: string[]
-  } & CompareOptions) => request<{ deleted: { a: number; b: number }; flips_deleted: { a: number; b: number } }>(
-      'POST',
-      '/api/compare/delete-unpaired',
-      body,
-    ),
+  } & CompareOptions): JobStart<{ deleted: { a: number; b: number }; flips_deleted: { a: number; b: number } }> =>
+    request('POST', '/api/compare/delete-unpaired', body),
+
+  getJob: <T,>(id: string) => request<JobInfo<T>>('GET', `/api/jobs/${id}`),
+  listJobs: (active = true) => request<JobInfo[]>('GET', `/api/jobs?active=${active}`),
+  cancelJob: (id: string) => request<JobInfo>('POST', `/api/jobs/${id}/cancel`),
+}
+
+export interface UploadProgress {
+  loaded: number
+  total: number
+  filesDone: number
+  filesTotal: number
+  current: string
+}
+
+/**
+ * Upload in batches (so huge selections don't become one giant request) and report
+ * byte-level progress via XMLHttpRequest. Abort with the returned controller's signal.
+ */
+export async function uploadWithProgress(
+  name: string,
+  files: File[],
+  onProgress: (p: UploadProgress) => void,
+  signal: AbortSignal,
+): Promise<string[]> {
+  const MAX_BATCH_BYTES = 64 * 1024 ** 2
+  const MAX_BATCH_FILES = 100
+  const batches: File[][] = []
+  let cur: File[] = []
+  let curBytes = 0
+  for (const f of files) {
+    if (cur.length && (curBytes + f.size > MAX_BATCH_BYTES || cur.length >= MAX_BATCH_FILES)) {
+      batches.push(cur)
+      cur = []
+      curBytes = 0
+    }
+    cur.push(f)
+    curBytes += f.size
+  }
+  if (cur.length) batches.push(cur)
+
+  const total = files.reduce((n, f) => n + f.size, 0)
+  let sentBefore = 0
+  let filesDone = 0
+  const saved: string[] = []
+  for (const batch of batches) {
+    const batchBytes = batch.reduce((n, f) => n + f.size, 0)
+    const label = batch.length === 1 ? batch[0].name : `${batch[0].name} 외 ${batch.length - 1}개`
+    const res = await new Promise<{ files: string[] }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      const form = new FormData()
+      batch.forEach((f) => form.append('files', f, f.name))
+      xhr.open('POST', `${ds(name)}/upload`)
+      xhr.upload.onprogress = (e) => {
+        const loaded = sentBefore + Math.min(batchBytes, e.lengthComputable ? (e.loaded / e.total) * batchBytes : 0)
+        onProgress({ loaded, total, filesDone, filesTotal: files.length, current: label })
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText))
+        else {
+          let msg = `${xhr.status} ${xhr.statusText}`
+          try {
+            msg = JSON.parse(xhr.responseText).detail ?? msg
+          } catch {
+            /* not json */
+          }
+          reject(new ApiError(msg, xhr.status))
+        }
+      }
+      xhr.onerror = () => reject(new ApiError('네트워크 오류로 업로드에 실패했습니다.', 0))
+      xhr.onabort = () => reject(new DOMException('Aborted', 'AbortError'))
+      signal.addEventListener('abort', () => xhr.abort(), { once: true })
+      xhr.send(form)
+    })
+    saved.push(...res.files)
+    sentBefore += batchBytes
+    filesDone += batch.length
+    onProgress({ loaded: sentBefore, total, filesDone, filesTotal: files.length, current: label })
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+  }
+  return saved
 }
 
 export const fileUrl = (dataset: string, item: Item) =>

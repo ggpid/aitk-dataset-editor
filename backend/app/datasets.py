@@ -16,6 +16,8 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
+from .progress import NO_PROGRESS, Progress
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v", ".flv", ".webm"}
 AUDIO_EXTS = {".mp3", ".wav", ".flac", ".ogg"}
@@ -161,8 +163,14 @@ class DatasetStore:
         path.mkdir()
         return cleaned
 
-    def delete_dataset(self, name: str) -> None:
-        shutil.rmtree(self.dataset_dir(name))
+    def delete_dataset(self, name: str, progress: Progress = NO_PROGRESS) -> None:
+        ds = self.dataset_dir(name)
+        files = [Path(root) / f for root, _, names in os.walk(ds) for f in names]
+        progress.set_total(len(files))
+        for f in files:
+            progress.step(f.relative_to(ds).as_posix())
+            f.unlink(missing_ok=True)
+        shutil.rmtree(ds)
 
     def rename_dataset(self, name: str, new_name: str) -> str:
         src = self.dataset_dir(name)
@@ -189,34 +197,44 @@ class DatasetStore:
             candidate, n = f"{base}{n}", n + 1
         return candidate
 
-    def duplicate_dataset(self, name: str, new_name: str, include_flips: bool = True) -> dict:
+    def duplicate_dataset(
+        self, name: str, new_name: str, include_flips: bool = True, progress: Progress = NO_PROGRESS
+    ) -> dict:
         """Copy a dataset folder. Hidden entries and ai-toolkit cache folders (*_cache) are skipped."""
         src = self.dataset_dir(name)
         cleaned = clean_rename_name(new_name)
         dst = self.dataset_dir(cleaned, must_exist=False)
         if dst.exists():
             raise DatasetError(f"이미 존재하는 데이터셋입니다: {cleaned}", 409)
+
+        # Collect the files first so progress has a total.
+        files: list[Path] = []
+        folders: list[Path] = []
         skipped_flips = 0
-
-        def ignore(folder: str, names: list[str]) -> set[str]:
-            nonlocal skipped_flips
-            out = set()
+        for root, dirs, names in os.walk(src):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and not d.endswith("_cache")]
+            folders += [Path(root, d).relative_to(src) for d in dirs]
             for n in names:
-                full = os.path.join(folder, n)
-                if n.startswith(".") or (os.path.isdir(full) and n.endswith("_cache")):
-                    out.add(n)
-                elif not include_flips and os.path.isfile(full) and is_flip_stem(os.path.splitext(n)[0]):
-                    out.add(n)
-                    if os.path.splitext(n)[1].lower() in MEDIA_EXTS:
-                        skipped_flips += 1
-            return out
+                if n.startswith("."):
+                    continue
+                stem, ext = os.path.splitext(n)
+                if not include_flips and is_flip_stem(stem):
+                    skipped_flips += ext.lower() in MEDIA_EXTS
+                    continue
+                files.append(Path(root, n).relative_to(src))
+        progress.set_total(len(files))
 
-        # Copy into a temporary folder first so a failed copy never leaves a half dataset behind.
+        # Copy into a temporary folder first so a failed or cancelled copy never leaves a half dataset.
         tmp = self.root / f".{cleaned}.copying"
         if tmp.exists():
             shutil.rmtree(tmp)
         try:
-            shutil.copytree(src, tmp, ignore=ignore)
+            tmp.mkdir()
+            for rel in folders:
+                (tmp / rel).mkdir(parents=True, exist_ok=True)
+            for rel in files:
+                progress.step(rel.as_posix())
+                shutil.copy2(src / rel, tmp / rel)
             tmp.rename(dst)
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -301,37 +319,63 @@ class DatasetStore:
             cap.unlink()
         return deleted
 
-    def delete_items(self, dataset: str, rels: list[str]) -> int:
-        return sum(1 for rel in rels if self.delete_item(dataset, rel))
+    def delete_items(self, dataset: str, rels: list[str], progress: Progress = NO_PROGRESS) -> int:
+        deleted = 0
+        for rel in rels:
+            progress.step(rel)
+            deleted += self.delete_item(dataset, rel)
+        return deleted
 
     def flip_companions(self, dataset: str, rel: str) -> list[str]:
-        """Existing ``<stem>_flip.*`` media files that belong to ``rel``."""
+        """Existing media linked to ``rel`` by the ``_flip`` naming rule, in both directions:
+        ``a.png`` -> ``a_flip.*`` and ``a_flip.png`` -> ``a.*``."""
         ds = self.dataset_dir(dataset)
         media = self.item_path(dataset, rel)
         if is_flip_stem(media.stem):
-            return []
+            stem = media.stem[: -len(FLIP_SUFFIX)]
+            if not stem:
+                return []
+        else:
+            stem = f"{media.stem}{FLIP_SUFFIX}"
         found = []
         for ext in [media.suffix, *sorted(MEDIA_EXTS)]:
-            cand = media.with_name(f"{media.stem}{FLIP_SUFFIX}{ext}")
+            cand = media.with_name(f"{stem}{ext}")
             if cand.is_file():
                 r = cand.relative_to(ds).as_posix()
                 if r not in found:
                     found.append(r)
         return found
 
-    def delete_items_with_flips(self, dataset: str, rels: list[str]) -> tuple[int, int]:
-        """Delete items plus their ``_flip`` companions. Returns (items, flips) deleted."""
-        flips = [f for rel in rels for f in self.flip_companions(dataset, rel)]
-        return self.delete_items(dataset, rels), self.delete_items(dataset, flips)
+    def delete_items_with_flips(
+        self, dataset: str, rels: list[str], progress: Progress = NO_PROGRESS
+    ) -> tuple[int, int]:
+        """Delete items plus their linked original/``_flip`` counterparts.
+        Returns (requested items deleted, extra linked items deleted).
+        The caller sets the progress total (see ``count_with_flips``)."""
+        linked = self._linked(dataset, rels)
+        return self.delete_items(dataset, rels, progress), self.delete_items(dataset, linked, progress)
+
+    def _linked(self, dataset: str, rels: list[str]) -> list[str]:
+        requested = set(rels)
+        out: list[str] = []
+        for rel in rels:
+            for c in self.flip_companions(dataset, rel):
+                if c not in requested and c not in out:
+                    out.append(c)
+        return out
+
+    def count_with_flips(self, dataset: str, rels: list[str]) -> int:
+        return len(rels) + len(self._linked(dataset, rels))
 
     # ---- flip ---------------------------------------------------------
-    def add_flips(self, dataset: str) -> dict:
+    def add_flips(self, dataset: str, progress: Progress = NO_PROGRESS) -> dict:
         ds = self.dataset_dir(dataset)
         created, skipped, unsupported = [], [], []
-        for media in sorted(self._iter_media(ds)):
-            if is_flip_stem(media.stem):
-                continue
+        originals = sorted(m for m in self._iter_media(ds) if not is_flip_stem(m.stem))
+        progress.set_total(len(originals))
+        for media in originals:
             rel = media.relative_to(ds).as_posix()
+            progress.step(rel)
             if media.suffix.lower() not in FLIPPABLE_EXTS:
                 unsupported.append(rel)
                 continue
@@ -346,14 +390,16 @@ class DatasetStore:
             created.append(target.relative_to(ds).as_posix())
         return {"created": created, "skipped": skipped, "unsupported": unsupported}
 
-    def remove_flips(self, dataset: str) -> dict:
+    def remove_flips(self, dataset: str, progress: Progress = NO_PROGRESS) -> dict:
         ds = self.dataset_dir(dataset)
         removed = []
-        for media in list(self._iter_media(ds)):
-            if is_flip_stem(media.stem):
-                rel = media.relative_to(ds).as_posix()
-                self.delete_item(dataset, rel)
-                removed.append(rel)
+        flips = [m for m in self._iter_media(ds) if is_flip_stem(m.stem)]
+        progress.set_total(len(flips))
+        for media in flips:
+            rel = media.relative_to(ds).as_posix()
+            progress.step(rel)
+            self.delete_item(dataset, rel)
+            removed.append(rel)
         # Orphan flip captions (media already gone).
         for cap in ds.rglob(f"*{FLIP_SUFFIX}{CAPTION_EXT}"):
             if not any(cap.with_suffix(e).exists() for e in MEDIA_EXTS):

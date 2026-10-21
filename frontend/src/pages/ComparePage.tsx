@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api, type CompareResult, type DatasetSummary, type Item, type Pair } from '../api'
 import { CaptionEditor, Media } from '../components'
 import DatasetCombo from '../DatasetCombo'
+import { CancelledError, useJobs } from '../jobs'
 import OverlayViewer from '../OverlayViewer'
 import PairGrid from '../PairGrid'
 import { errorText, Spinner, useIncremental, useUi } from '../ui'
@@ -14,6 +15,11 @@ const deletedText = (a: number, b: number, flips: number) =>
 
 export default function ComparePage() {
   const { toast, confirm } = useUi()
+  const { runJob } = useJobs()
+  const jobError = (e: unknown) =>
+    e instanceof CancelledError
+      ? toast('삭제를 취소했습니다. 이미 지워진 파일은 복구되지 않습니다.', 'info')
+      : toast(errorText(e), 'error')
   const [params, setParams] = useSearchParams()
   const a = params.get('a') ?? ''
   const b = params.get('b') ?? ''
@@ -120,18 +126,21 @@ export default function ComparePage() {
     })
     if (!ok) return
     try {
-      const r = await api.deleteUnpaired({
-        a,
-        b,
-        side,
-        ...opts,
-        paths_a: selection?.a,
-        paths_b: selection?.b,
-      })
+      const r = await runJob(() =>
+        api.deleteUnpaired({
+          a,
+          b,
+          side,
+          ...opts,
+          paths_a: selection?.a,
+          paths_b: selection?.b,
+        }),
+      )
       toast(deletedText(r.deleted.a, r.deleted.b, r.flips_deleted.a + r.flips_deleted.b), 'success')
-      load()
     } catch (e) {
-      toast(errorText(e), 'error')
+      jobError(e)
+    } finally {
+      load()
     }
   }
 
@@ -184,12 +193,12 @@ export default function ComparePage() {
       let db = 0
       let flips = 0
       if (side !== 'b') {
-        const r = await api.deleteItems(a, targets.map((p) => p.a.path), true)
+        const r = await runJob(() => api.deleteItems(a, targets.map((p) => p.a.path), true))
         da = r.deleted
         flips += r.flips_deleted
       }
       if (side !== 'a') {
-        const r = await api.deleteItems(b, targets.map((p) => p.b.path), true)
+        const r = await runJob(() => api.deleteItems(b, targets.map((p) => p.b.path), true))
         db = r.deleted
         flips += r.flips_deleted
       }
@@ -197,7 +206,7 @@ export default function ComparePage() {
       await load()
       return true
     } catch (e) {
-      toast(errorText(e), 'error')
+      jobError(e)
       await load()
       return false
     }

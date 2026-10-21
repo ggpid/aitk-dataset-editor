@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
+import { CancelledError, useJobs } from './jobs'
 import { previewName } from './RenameDialog'
 import { errorText, Modal, Spinner, useUi } from './ui'
 
@@ -15,6 +16,7 @@ export default function DuplicateDialog({
   onDuplicated: (newName: string) => void
 }) {
   const { toast } = useUi()
+  const { runJob } = useJobs()
   const [value, setValue] = useState<string | null>(null)
   const [includeFlips, setIncludeFlips] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -32,16 +34,27 @@ export default function DuplicateDialog({
   const submit = async () => {
     if (value === null || invalid || saving) return
     setSaving(true)
+    let started: Awaited<ReturnType<typeof api.duplicateDataset>>
     try {
-      const r = await api.duplicateDataset(name, value, includeFlips)
+      // Name problems (invalid / already exists) come back here, so the dialog stays open for them.
+      started = await api.duplicateDataset(name, value, includeFlips)
+    } catch (e) {
+      toast(errorText(e), 'error')
+      setSaving(false)
+      return
+    }
+    // The copy itself runs in the background; its progress is shown in the job panel.
+    onClose()
+    try {
+      const r = await runJob(() => Promise.resolve(started))
       toast(
         `'${name}' → '${r.name}' 복제됨 (${r.count}개${r.skipped_flips ? `, _flip ${r.skipped_flips}개 제외` : ''})`,
         'success',
       )
       onDuplicated(r.name)
     } catch (e) {
-      toast(errorText(e), 'error')
-      setSaving(false)
+      if (e instanceof CancelledError) toast('복제를 취소했습니다.', 'info')
+      else toast(errorText(e), 'error')
     }
   }
 
@@ -86,7 +99,7 @@ export default function DuplicateDialog({
             취소
           </button>
           <button type="submit" className="primary" disabled={value === null || invalid || saving}>
-            {saving ? '복제 중…' : '복제'}
+            {saving ? '시작 중…' : '복제'}
           </button>
         </div>
       </form>

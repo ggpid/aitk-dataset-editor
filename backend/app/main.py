@@ -11,7 +11,8 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from . import config
-from .datasets import IMAGE_EXTS, DatasetError, DatasetStore, compare
+from .datasets import IMAGE_EXTS, DatasetError, DatasetStore, clean_rename_name, compare
+from .jobs import jobs
 from .thumbs import thumbnail
 
 app = FastAPI(title="ai-toolkit Dataset Editor")
@@ -80,14 +81,24 @@ def create_dataset(body: NameBody):
     return {"name": store().create_dataset(body.name)}
 
 
+def job_response(job) -> dict:
+    return {"job": job.to_dict()}
+
+
 @app.delete("/api/datasets/{name}")
 def delete_dataset(name: str):
-    store().delete_dataset(name)
-    return {"ok": True}
+    s = store()
+    s.dataset_dir(name)
+    return job_response(
+        jobs.start("delete_dataset", f"'{name}' 데이터셋 삭제", [name], lambda j: s.delete_dataset(name, j))
+    )
 
 
 @app.patch("/api/datasets/{name}")
 def rename_dataset(name: str, body: NameBody):
+    busy = [j for j in jobs.list(active_only=True) if name in j.datasets]
+    if busy:
+        raise DatasetError(f"'{busy[0].title}' 작업이 진행 중입니다. 끝난 뒤 다시 시도하세요.", 409)
     return {"name": store().rename_dataset(name, body.name)}
 
 
@@ -104,8 +115,21 @@ def suggest_duplicate_name(name: str):
 
 
 @app.post("/api/datasets/{name}/duplicate")
-async def duplicate_dataset(name: str, body: DuplicateBody):
-    return await run_in_threadpool(store().duplicate_dataset, name, body.name, body.include_flips)
+def duplicate_dataset(name: str, body: DuplicateBody):
+    s = store()
+    s.dataset_dir(name)
+    # Validate up front so name errors show immediately instead of as a failed job.
+    new = clean_rename_name(body.name)
+    if s.dataset_dir(new, must_exist=False).exists():
+        raise DatasetError(f"이미 존재하는 데이터셋입니다: {new}", 409)
+    return job_response(
+        jobs.start(
+            "duplicate",
+            f"'{name}' → '{new}' 복제",
+            [name, new],
+            lambda j: s.duplicate_dataset(name, new, body.include_flips, j),
+        )
+    )
 
 
 @app.get("/api/datasets/{name}/items")
@@ -139,20 +163,32 @@ class PathsBody(BaseModel):
 
 @app.post("/api/datasets/{name}/delete-items")
 def delete_items(name: str, body: PathsBody):
-    if body.with_flips:
-        deleted, flips = store().delete_items_with_flips(name, body.paths)
-        return {"deleted": deleted, "flips_deleted": flips}
-    return {"deleted": store().delete_items(name, body.paths), "flips_deleted": 0}
+    s = store()
+    s.dataset_dir(name)
+
+    def run(j):
+        if body.with_flips:
+            j.set_total(s.count_with_flips(name, body.paths))
+            deleted, flips = s.delete_items_with_flips(name, body.paths, j)
+            return {"deleted": deleted, "flips_deleted": flips}
+        j.set_total(len(body.paths))
+        return {"deleted": s.delete_items(name, body.paths, j), "flips_deleted": 0}
+
+    return job_response(jobs.start("delete_items", f"'{name}' 항목 {len(body.paths)}개 삭제", [name], run))
 
 
 @app.post("/api/datasets/{name}/flip")
 def add_flips(name: str):
-    return store().add_flips(name)
+    s = store()
+    s.dataset_dir(name)
+    return job_response(jobs.start("add_flips", f"'{name}' flip 이미지 생성", [name], lambda j: s.add_flips(name, j)))
 
 
 @app.delete("/api/datasets/{name}/flip")
 def remove_flips(name: str):
-    return store().remove_flips(name)
+    s = store()
+    s.dataset_dir(name)
+    return job_response(jobs.start("remove_flips", f"'{name}' _flip 제거", [name], lambda j: s.remove_flips(name, j)))
 
 
 @app.get("/api/datasets/{name}/file")
@@ -200,21 +236,56 @@ class DeleteUnpairedBody(BaseModel):
 @app.post("/api/compare/delete-unpaired")
 def delete_unpaired(body: DeleteUnpairedBody):
     s = store()
-    result = compare(s.list_items(body.a), s.list_items(body.b), body.ignore_case, body.ignore_folders)
-    deleted = {"a": 0, "b": 0}
-    flips = {"a": 0, "b": 0}
-    for side, ds, items, only in (
-        ("a", body.a, result["only_a"], body.paths_a),
-        ("b", body.b, result["only_b"], body.paths_b),
-    ):
-        if body.side not in (side, "both"):
-            continue
-        targets = [it["path"] for it in items]
-        if only is not None:
-            allowed = set(only)
-            targets = [t for t in targets if t in allowed]
-        deleted[side], flips[side] = s.delete_items_with_flips(ds, targets)
-    return {"deleted": deleted, "flips_deleted": flips}
+    s.dataset_dir(body.a)
+    s.dataset_dir(body.b)
+
+    def run(j):
+        j.note("짝 비교 중…")
+        result = compare(s.list_items(body.a), s.list_items(body.b), body.ignore_case, body.ignore_folders)
+        plan = []
+        for side, ds, items, only in (
+            ("a", body.a, result["only_a"], body.paths_a),
+            ("b", body.b, result["only_b"], body.paths_b),
+        ):
+            if body.side not in (side, "both"):
+                continue
+            targets = [it["path"] for it in items]
+            if only is not None:
+                allowed = set(only)
+                targets = [t for t in targets if t in allowed]
+            plan.append((side, ds, targets))
+        j.set_total(sum(s.count_with_flips(ds, t) for _, ds, t in plan))
+        deleted = {"a": 0, "b": 0}
+        flips = {"a": 0, "b": 0}
+        for side, ds, targets in plan:
+            deleted[side], flips[side] = s.delete_items_with_flips(ds, targets, j)
+        return {"deleted": deleted, "flips_deleted": flips}
+
+    names = sorted({body.a, body.b})
+    return job_response(jobs.start("delete_unpaired", "짝없는 데이터 삭제", names, run))
+
+
+# ---- jobs ---------------------------------------------------------------
+@app.get("/api/jobs")
+def list_jobs(active: bool = False):
+    return [j.to_dict() for j in jobs.list(active_only=active)]
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "작업을 찾을 수 없습니다.")
+    return job.to_dict()
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "작업을 찾을 수 없습니다.")
+    job.cancel()
+    return job.to_dict()
 
 
 # ---- frontend -----------------------------------------------------------

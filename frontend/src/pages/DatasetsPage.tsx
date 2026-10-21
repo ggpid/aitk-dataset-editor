@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, type DatasetSummary } from '../api'
 import DuplicateDialog from '../DuplicateDialog'
+import { CancelledError, useJobs } from '../jobs'
 import RenameDialog from '../RenameDialog'
 import { errorText, Spinner, useUi } from '../ui'
 
 export default function DatasetsPage() {
   const { toast, confirm } = useUi()
   const navigate = useNavigate()
+  const { runJob, busyDatasets } = useJobs()
   const [datasets, setDatasets] = useState<DatasetSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
@@ -49,11 +51,13 @@ export default function DatasetsPage() {
     })
     if (!ok) return
     try {
-      await api.deleteDataset(d.name)
+      await runJob(() => api.deleteDataset(d.name))
       toast(`'${d.name}' 삭제됨`, 'success')
-      load()
     } catch (e) {
-      toast(errorText(e), 'error')
+      if (e instanceof CancelledError) toast('삭제를 취소했습니다. 이미 지워진 파일은 복구되지 않습니다.', 'info')
+      else toast(errorText(e), 'error')
+    } finally {
+      load()
     }
   }
 
@@ -116,8 +120,12 @@ export default function DatasetsPage() {
                 </td>
                 <td className="num">{d.flip_count || '-'}</td>
                 <td className="actions">
-                  <button onClick={() => setRenaming(d.name)}>이름 변경</button>
-                  <button onClick={() => setDuplicating(d)}>복제</button>
+                  <button onClick={() => setRenaming(d.name)} disabled={busyDatasets.has(d.name)}>
+                    이름 변경
+                  </button>
+                  <button onClick={() => setDuplicating(d)} disabled={busyDatasets.has(d.name)}>
+                    복제
+                  </button>
                   <button className="danger ghost" onClick={() => remove(d)}>
                     삭제
                   </button>
