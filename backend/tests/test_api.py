@@ -351,3 +351,36 @@ def test_convert_birefnet_to_sam(env):
     assert json.loads((aitk / "datasets" / "bire_sam2" / "a.json").read_text())["annotations"].__len__() == 1
     assert client.post("/api/convert/sam", json={"image_dataset": "bire", "output": "bire_sam"}).status_code == 409
     assert client.post("/api/convert/sam/preview", json={"image_dataset": "bire", "mask_dir": "nope"}).status_code == 400
+
+
+def test_save_overlay(env):
+    client, aitk = env
+    a, b = aitk / "datasets" / "oa", aitk / "datasets" / "ob"
+    (a / "sub").mkdir(parents=True); (b / "sub").mkdir(parents=True)
+    Image.new("RGB", (4, 2), (200, 0, 0)).save(a / "p1.jpg"); (a / "p1.txt").write_text("cap a")
+    Image.new("RGB", (2, 1), (0, 0, 200)).save(b / "p1.png"); (b / "p1.txt").write_text("cap b")  # smaller -> stretched
+    Image.new("RGB", (4, 4), (0, 200, 0)).save(a / "sub" / "p2.png")
+    Image.new("RGBA", (2, 4), (255, 255, 255, 255)).save(b / "sub" / "p2.png")  # tall -> contain: centred column
+    Image.new("RGB", (4, 4)).save(a / "only_a.png")
+
+    r = wait(client, client.post("/api/compare/save-overlay", json={
+        "a": "oa", "b": "ob", "name": "mix", "opacity": 0.5, "stretch": True, "captions": "b"}))
+    assert r == {"name": "mix", "written": 2, "skipped_non_image": 0}
+    m = aitk / "datasets" / "mix"
+    assert sorted(p.relative_to(m).as_posix() for p in m.rglob("*") if p.is_file()) == ["p1.jpg", "p1.txt", "sub/p2.png"]
+    assert (m / "p1.txt").read_text() == "cap b"
+    with Image.open(m / "p1.jpg") as im:
+        assert im.size == (4, 2)
+        r_, g_, b_ = im.getpixel((1, 1))
+        assert abs(r_ - 100) < 8 and abs(b_ - 100) < 8  # 50/50 of red and blue
+
+    # contain (no stretch), A captions, only selected key
+    r = wait(client, client.post("/api/compare/save-overlay", json={
+        "a": "oa", "b": "ob", "name": "mix2", "opacity": 1.0, "stretch": False, "captions": "none", "keys": ["sub/p2"]}))
+    assert r["written"] == 1
+    with Image.open(aitk / "datasets" / "mix2" / "sub" / "p2.png") as im:
+        assert im.getpixel((0, 0)) == (0, 200, 0)  # outside B's centred box: A shows
+        assert im.getpixel((2, 2)) == (255, 255, 255)  # inside: B at full opacity
+    assert not (aitk / "datasets" / "mix2" / "sub" / "p2.txt").exists()
+
+    assert client.post("/api/compare/save-overlay", json={"a": "oa", "b": "ob", "name": "mix", "opacity": 0.5}).status_code == 409

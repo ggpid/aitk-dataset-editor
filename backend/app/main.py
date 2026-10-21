@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import config, sam
+from . import config, overlay, sam
 from .datasets import IMAGE_EXTS, DatasetError, DatasetStore, clean_rename_name, compare
 from .jobs import jobs
 from .thumbs import thumbnail
@@ -269,6 +269,39 @@ class DeleteUnpairedBody(BaseModel):
     # Restrict deletion to these relative paths (per side). None = all unpaired.
     paths_a: list[str] | None = None
     paths_b: list[str] | None = None
+
+
+class SaveOverlayBody(BaseModel):
+    a: str
+    b: str
+    name: str
+    opacity: float  # 0..1, B over A
+    stretch: bool = True
+    captions: Literal["a", "b", "none"] = "a"
+    keys: list[str] | None = None  # pair keys to include; None = all pairs
+    ignore_case: bool = False
+    ignore_folders: bool = False
+
+
+@app.post("/api/compare/save-overlay")
+def save_overlay(body: SaveOverlayBody):
+    s = store()
+    s.dataset_dir(body.a)
+    s.dataset_dir(body.b)
+    new = clean_rename_name(body.name)
+    if s.dataset_dir(new, must_exist=False).exists():
+        raise DatasetError(f"이미 존재하는 데이터셋입니다: {new}", 409)
+    return job_response(
+        jobs.start(
+            "save_overlay",
+            f"'{body.a}' + '{body.b}' 겹치기 → '{new}'",
+            [new],
+            lambda j: overlay.save_overlay_dataset(
+                s, body.a, body.b, new, body.opacity, body.stretch, body.captions,
+                body.keys, body.ignore_case, body.ignore_folders, j,
+            ),
+        )
+    )
 
 
 @app.post("/api/compare/delete-unpaired")

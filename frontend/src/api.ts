@@ -182,6 +182,17 @@ export const api = {
   } & CompareOptions): JobStart<{ deleted: { a: number; b: number }; flips_deleted: { a: number; b: number } }> =>
     request('POST', '/api/compare/delete-unpaired', body),
 
+  saveOverlay: (body: {
+    a: string
+    b: string
+    name: string
+    opacity: number
+    stretch: boolean
+    captions: 'a' | 'b' | 'none'
+    keys: string[]
+  } & CompareOptions): JobStart<{ name: string; written: number; skipped_non_image: number }> =>
+    request('POST', '/api/compare/save-overlay', body),
+
   samPreview: (o: SamOptions) => request<SamPreview>('POST', '/api/convert/sam/preview', o),
   samConvert: (o: SamOptions): JobStart<SamResult> => request('POST', '/api/convert/sam', o),
 

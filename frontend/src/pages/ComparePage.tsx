@@ -62,9 +62,14 @@ export default function ComparePage() {
       { replace: true },
     )
 
+  const loadDatasets = useCallback(
+    () => api.listDatasets().then(setDatasets).catch((e) => toast(errorText(e), 'error')),
+    [toast],
+  )
+
   useEffect(() => {
-    api.listDatasets().then(setDatasets).catch((e) => toast(errorText(e), 'error'))
-  }, [toast])
+    loadDatasets()
+  }, [loadDatasets])
 
   const load = useCallback(async () => {
     if (!a || !b) {
@@ -336,7 +341,16 @@ export default function ComparePage() {
                 )}
               </div>
               {pairView === 'grid' ? (
-                <PairGrid a={a} b={b} pairs={paired} onOpen={setViewing} selected={selPairs} onToggle={togglePair} />
+                <PairGrid
+                  a={a}
+                  b={b}
+                  pairs={paired}
+                  onOpen={setViewing}
+                  selected={selPairs}
+                  onToggle={togglePair}
+                  opts={opts}
+                  onDatasetCreated={() => loadDatasets()}
+                />
               ) : (
                 <PairedList
                   a={a}

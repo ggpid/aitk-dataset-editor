@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import type { Pair } from './api'
+import type { CompareOptions, Pair } from './api'
 import { Media } from './components'
+import SaveOverlayDialog from './SaveOverlayDialog'
 import { useIncremental } from './ui'
 
 type Mode = 'overlay' | 'swipe' | 'diff' | 'blink' | 'a' | 'b'
@@ -42,6 +43,8 @@ export default function PairGrid({
   onOpen,
   selected,
   onToggle,
+  opts,
+  onDatasetCreated,
 }: {
   a: string
   b: string
@@ -49,8 +52,11 @@ export default function PairGrid({
   onOpen: (i: number) => void
   selected: Set<string>
   onToggle: (key: string, shift: boolean) => void
+  opts: CompareOptions
+  onDatasetCreated: (name: string) => void
 }) {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs)
+  const [saving, setSaving] = useState(false)
   const [blinkB, setBlinkB] = useState(false)
   const set = (p: Partial<Prefs>) => setPrefs((v) => ({ ...v, ...p }))
   const { visible, sentinel } = useIncremental(pairs, 80)
@@ -121,6 +127,15 @@ export default function PairGrid({
           <input type="checkbox" checked={prefs.stretch} onChange={(e) => set({ stretch: e.target.checked })} />
           B를 A 크기에 맞춤
         </label>
+        {mode === 'overlay' && (
+          <button
+            className="primary"
+            title="지금 보이는 겹친 모습 그대로(원본 해상도) 새 데이터셋으로 저장"
+            onClick={() => setSaving(true)}
+          >
+            💾 보이는 대로 새 데이터셋 저장{selected.size ? ` (선택 ${selected.size}쌍)` : ''}
+          </button>
+        )}
         <div className="spacer" />
         <label className="slider">
           크기
@@ -146,6 +161,19 @@ export default function PairGrid({
         ))}
       </div>
       {sentinel}
+      {saving && (
+        <SaveOverlayDialog
+          a={a}
+          b={b}
+          keys={selected.size ? [...selected] : pairs.map((p) => p.key)}
+          scopeLabel={selected.size ? `선택한 ${selected.size}쌍` : `보이는 짝 전체 ${pairs.length}쌍`}
+          opacity={prefs.opacity}
+          stretch={prefs.stretch}
+          opts={opts}
+          onClose={() => setSaving(false)}
+          onSaved={onDatasetCreated}
+        />
+      )}
     </>
   )
 }
