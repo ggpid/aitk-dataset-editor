@@ -8,12 +8,16 @@ export interface Settings {
   error: string | null
 }
 
+/** The dataset list only carries names (fast); counts come from datasetStats. */
 export interface DatasetSummary {
+  name: string
+}
+
+export interface DatasetStats {
   name: string
   count: number
   flip_count: number
   caption_count: number
-  mtime: number
 }
 
 export interface Item {
@@ -105,6 +109,7 @@ export const api = {
     request<Settings>('PUT', '/api/settings', s),
 
   listDatasets: () => request<DatasetSummary[]>('GET', '/api/datasets'),
+  datasetStats: (name: string) => request<DatasetStats>('GET', `${ds(name)}/stats`),
   createDataset: (name: string) => request<{ name: string }>('POST', '/api/datasets', { name }),
   deleteDataset: (name: string): JobStart<null> => request('DELETE', ds(name)),
   suggestDuplicateName: (name: string) => request<{ name: string }>('GET', `${ds(name)}/duplicate-name`),

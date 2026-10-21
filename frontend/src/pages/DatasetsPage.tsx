@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, type DatasetSummary } from '../api'
+import { api, type DatasetStats, type DatasetSummary } from '../api'
 import DuplicateDialog from '../DuplicateDialog'
 import { CancelledError, useJobs } from '../jobs'
 import RenameDialog from '../RenameDialog'
@@ -17,14 +17,42 @@ export default function DatasetsPage() {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [duplicating, setDuplicating] = useState<DatasetSummary | null>(null)
 
+  const [stats, setStats] = useState<Record<string, DatasetStats | 'error'>>({})
+  const generation = useRef(0)
+
+  // Names come back instantly; counts are filled in afterwards, a few datasets at a time,
+  // so a large or slow (network) datasets folder never blocks the list.
+  const loadStats = useCallback(async (names: string[]) => {
+    const gen = ++generation.current
+    const queue = [...names]
+    const worker = async () => {
+      while (queue.length && gen === generation.current) {
+        const n = queue.shift()!
+        let st: DatasetStats | 'error'
+        try {
+          st = await api.datasetStats(n)
+        } catch {
+          st = 'error'
+        }
+        if (gen === generation.current) setStats((m) => ({ ...m, [n]: st }))
+      }
+    }
+    await Promise.all([worker(), worker(), worker()])
+  }, [])
+
   const load = useCallback(async () => {
     try {
-      setDatasets(await api.listDatasets())
+      const list = await api.listDatasets()
+      setDatasets(list)
       setError(null)
+      setStats({})
+      loadStats(list.map((d) => d.name))
     } catch (e) {
       setError(errorText(e))
     }
-  }, [])
+  }, [loadStats])
+
+  useEffect(() => () => void generation.current++, [])
 
   useEffect(() => {
     load()
@@ -43,9 +71,10 @@ export default function DatasetsPage() {
   }
 
   const remove = async (d: DatasetSummary) => {
+    const st = stats[d.name]
     const ok = await confirm({
       title: `'${d.name}' 데이터셋 삭제`,
-      message: `폴더와 파일 ${d.count}개가 영구 삭제됩니다. 되돌릴 수 없습니다.`,
+      message: `폴더와 ${st && st !== 'error' ? `파일 ${st.count}개가` : '안의 모든 파일이'} 영구 삭제됩니다. 되돌릴 수 없습니다.`,
       confirmText: '삭제',
       danger: true,
     })
@@ -113,12 +142,7 @@ export default function DatasetsPage() {
                 <td>
                   <Link to={`/datasets/${encodeURIComponent(d.name)}`}>{d.name}</Link>
                 </td>
-                <td className="num">{d.count}</td>
-                <td className="num">
-                  {d.caption_count}
-                  {d.caption_count < d.count && <span className="muted"> / {d.count}</span>}
-                </td>
-                <td className="num">{d.flip_count || '-'}</td>
+                <StatCells st={stats[d.name]} />
                 <td className="actions">
                   <button onClick={() => setRenaming(d.name)} disabled={busyDatasets.has(d.name)}>
                     이름 변경
@@ -138,7 +162,10 @@ export default function DatasetsPage() {
       {duplicating && (
         <DuplicateDialog
           name={duplicating.name}
-          hasFlips={duplicating.flip_count > 0}
+          hasFlips={(() => {
+            const st = stats[duplicating.name]
+            return !st || st === 'error' || st.flip_count > 0
+          })()}
           onClose={() => setDuplicating(null)}
           onDuplicated={() => {
             setDuplicating(null)
@@ -157,5 +184,30 @@ export default function DatasetsPage() {
         />
       )}
     </div>
+  )
+}
+
+function StatCells({ st }: { st: DatasetStats | 'error' | undefined }) {
+  if (!st || st === 'error') {
+    const t = st ? '!' : '…'
+    return (
+      <>
+        <td className="num muted" title={st ? '개수를 읽지 못했습니다' : '세는 중'}>
+          {t}
+        </td>
+        <td className="num muted">{t}</td>
+        <td className="num muted">{t}</td>
+      </>
+    )
+  }
+  return (
+    <>
+      <td className="num">{st.count}</td>
+      <td className="num">
+        {st.caption_count}
+        {st.caption_count < st.count && <span className="muted"> / {st.count}</span>}
+      </td>
+      <td className="num">{st.flip_count || '-'}</td>
+    </>
   )
 }

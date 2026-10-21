@@ -97,7 +97,7 @@ export default function DatasetCombo({
     <div className={`combo ${open ? 'open' : ''}`}>
       <input
         ref={input}
-        value={open ? query : current ? `${current.name} (${current.count})` : value}
+        value={open ? query : (current?.name ?? value)}
         placeholder={open && value ? value : placeholder}
         onFocus={openList}
         onClick={() => !open && openList()}
@@ -160,7 +160,6 @@ export default function DatasetCombo({
                 <span className="combo-name">
                   <Highlight text={d.name} query={query} />
                 </span>
-                <span className="muted small">{d.count}</span>
               </li>
             ))
           )}

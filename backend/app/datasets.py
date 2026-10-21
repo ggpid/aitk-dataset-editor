@@ -70,6 +70,11 @@ def kind_of(ext: str) -> str:
     return "other"
 
 
+def skip_dir(name: str) -> bool:
+    """Folders that never hold dataset items: _controls and ai-toolkit caches (e.g. _latent_cache)."""
+    return name in SKIP_DIRS or name.endswith("_cache")
+
+
 def is_flip_stem(stem: str) -> bool:
     return stem.endswith(FLIP_SUFFIX)
 
@@ -135,24 +140,42 @@ class DatasetStore:
 
     # ---- datasets -----------------------------------------------------
     def list_datasets(self) -> list[dict]:
+        """Dataset names only. Counting files means walking every dataset, which is slow
+        for big datasets or network drives, so counts come separately from ``dataset_stats``."""
         self.ensure_root()
-        result = []
-        for entry in sorted(os.scandir(self.root), key=lambda e: e.name.lower()):
-            if not entry.is_dir() or entry.name.startswith("."):
+        names = [
+            e.name for e in os.scandir(self.root) if e.is_dir() and not e.name.startswith(".")
+        ]
+        return [{"name": n} for n in sorted(names, key=str.lower)]
+
+    def dataset_stats(self, name: str) -> dict:
+        """File / caption / _flip counts using directory listings only (no per-file stat)."""
+        ds = self.dataset_dir(name)
+        count = flips = captions = 0
+        stack = [ds]
+        while stack:
+            current = stack.pop()
+            try:
+                entries = list(os.scandir(current))
+            except OSError:
                 continue
-            media = list(self._iter_media(Path(entry.path)))
-            flips = sum(1 for p in media if is_flip_stem(p.stem))
-            captions = sum(1 for p in media if caption_path(p).is_file())
-            result.append(
-                {
-                    "name": entry.name,
-                    "count": len(media),
-                    "flip_count": flips,
-                    "caption_count": captions,
-                    "mtime": entry.stat().st_mtime,
-                }
-            )
-        return result
+            files = set()
+            for e in entries:
+                if e.name.startswith("."):
+                    continue
+                if e.is_dir(follow_symlinks=False):
+                    if not skip_dir(e.name):
+                        stack.append(Path(e.path))
+                else:
+                    files.add(e.name)
+            for f in files:
+                stem, ext = os.path.splitext(f)
+                if ext.lower() not in MEDIA_EXTS:
+                    continue
+                count += 1
+                flips += is_flip_stem(stem)
+                captions += f"{stem}{CAPTION_EXT}" in files
+        return {"name": name, "count": count, "flip_count": flips, "caption_count": captions}
 
     def create_dataset(self, name: str) -> str:
         self.ensure_root()
@@ -255,7 +278,7 @@ class DatasetStore:
                 if entry.name.startswith("."):
                     continue
                 if entry.is_dir(follow_symlinks=False):
-                    if entry.name not in SKIP_DIRS:
+                    if not skip_dir(entry.name):
                         stack.append(Path(entry.path))
                 elif entry.is_file() and os.path.splitext(entry.name)[1].lower() in MEDIA_EXTS:
                     yield Path(entry.path)

@@ -76,6 +76,11 @@ def list_datasets():
     return store().list_datasets()
 
 
+@app.get("/api/datasets/{name}/stats")
+def dataset_stats(name: str):
+    return store().dataset_stats(name)
+
+
 @app.post("/api/datasets")
 def create_dataset(body: NameBody):
     return {"name": store().create_dataset(body.name)}

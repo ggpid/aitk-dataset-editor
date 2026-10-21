@@ -265,3 +265,23 @@ def test_delete_with_flips_both_directions(env):
     r = wait(client, client.post("/api/datasets/fl/delete-items", json={"paths": ["c.png", "c_flip.png"], "with_flips": True}))
     assert r == {"deleted": 2, "flips_deleted": 0}
     assert list(d.iterdir()) == []
+
+
+def test_list_is_names_only_and_stats(env):
+    client, aitk = env
+    d = aitk / "datasets" / "st"
+    (d / "sub").mkdir(parents=True)
+    (d / "_latent_cache").mkdir()
+    for n in ["a", "b", "sub/c"]:
+        make_img(d / f"{n}.png")
+    (d / "a.txt").write_text("x")
+    (d / "sub" / "c.txt").write_text("x")
+    make_img(d / "a_flip.png")
+    make_img(d / "_latent_cache" / "ignored.png")
+    (aitk / "datasets" / "empty").mkdir()
+    assert client.get("/api/datasets").json() == [{"name": "empty"}, {"name": "st"}]
+    assert client.get("/api/datasets/st/stats").json() == {
+        "name": "st", "count": 4, "flip_count": 1, "caption_count": 2,
+    }
+    assert client.get("/api/datasets/empty/stats").json()["count"] == 0
+    assert client.get("/api/datasets/nope/stats").status_code == 404
