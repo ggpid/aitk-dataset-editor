@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api, type CompareResult, type DatasetSummary, type Item, type Pair } from '../api'
 import { CaptionEditor, Media } from '../components'
 import DatasetCombo from '../DatasetCombo'
+import MaskDialog from '../MaskDialog'
 import { CancelledError, useJobs } from '../jobs'
 import OverlayViewer from '../OverlayViewer'
 import PairGrid from '../PairGrid'
@@ -34,6 +35,7 @@ export default function ComparePage() {
   const lastToggled = useRef<string | null>(null)
   const [viewing, setViewing] = useState<number | null>(null)
   const [search, setSearch] = useState('')
+  const [masking, setMasking] = useState(false)
   const [pairView, setPairView] = useState<'list' | 'grid'>(() => {
     try {
       return localStorage.getItem('aitk-editor.pairview') === 'grid' ? 'grid' : 'list'
@@ -249,6 +251,13 @@ export default function ComparePage() {
           ⇄
         </button>
         <DatasetSelect label="B" value={b} datasets={datasets} onChange={(v) => setParam('b', v)} />
+        <button
+          onClick={() => setMasking(true)}
+          disabled={!a || !b}
+          title="칠해진 타깃과 흰 건물 컨트롤을 비교해 외벽 마스크(흰색=외벽) 데이터셋을 만듭니다"
+        >
+          🎭 마스크 데이터셋 생성
+        </button>
         <div className="spacer" />
         <label className="check">
           <input
@@ -405,6 +414,9 @@ export default function ComparePage() {
             }
           }}
         />
+      )}
+      {masking && a && b && (
+        <MaskDialog a={a} b={b} opts={opts} onClose={() => setMasking(false)} onCreated={() => loadDatasets()} />
       )}
     </div>
   )

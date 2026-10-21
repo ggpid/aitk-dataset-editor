@@ -1143,3 +1143,69 @@ main > .spinner {
   flex-direction: row;
   align-items: center;
 }
+
+/* ---- wall mask dialog ---- */
+.modal:has(.mask-dialog) {
+  max-width: 1100px;
+}
+.mask-body {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 16px;
+}
+.mask-params {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mask-param {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mask-param input[type='range'] {
+  flex: 1;
+}
+.mask-param input[type='number'] {
+  width: 64px;
+}
+.mask-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.mask-preview select {
+  flex: 1;
+  min-width: 0;
+}
+.mask-preview-img {
+  min-height: 220px;
+  background: #0a0b0e;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+}
+.mask-preview-img img {
+  max-width: 100%;
+  max-height: 46vh;
+  object-fit: contain;
+}
+.key-list {
+  max-height: 160px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+@media (max-width: 900px) {
+  .mask-body {
+    grid-template-columns: 1fr;
+  }
+}

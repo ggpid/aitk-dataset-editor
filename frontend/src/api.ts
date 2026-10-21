@@ -102,6 +102,35 @@ export interface SamResult {
   masks_without_image: number
 }
 
+export interface MaskParams {
+  diff_threshold: number
+  alpha_threshold: number
+  open_px: number
+  close_px: number
+  dilate_px: number
+  no_control: 'alpha' | 'skip'
+}
+
+export interface MaskInfo {
+  targets: number
+  pairs: number
+  only_target: string[]
+  only_control: string[]
+  sample_keys: string[]
+}
+
+export interface MaskResult {
+  name: string
+  preview: string | null
+  made: number
+  only_target: string[]
+  only_control: string[]
+  no_control: 'alpha' | 'skip'
+  warnings: { key: string; notes: string[] }[]
+}
+
+type MaskSource = { target: string; control: string } & CompareOptions
+
 export class ApiError extends Error {
   status: number
   constructor(message: string, status: number) {
@@ -192,6 +221,32 @@ export const api = {
     keys: string[]
   } & CompareOptions): JobStart<{ name: string; written: number; skipped_non_image: number }> =>
     request('POST', '/api/compare/save-overlay', body),
+
+  masksInfo: (body: MaskSource) => request<MaskInfo>('POST', '/api/compare/masks/info', body),
+  masksPreview: async (body: MaskSource & { key: string; params: MaskParams }, signal?: AbortSignal) => {
+    const res = await fetch('/api/compare/masks/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    })
+    if (!res.ok) {
+      let msg = `${res.status} ${res.statusText}`
+      try {
+        msg = (await res.json()).detail ?? msg
+      } catch {
+        /* not json */
+      }
+      throw new ApiError(msg, res.status)
+    }
+    return {
+      url: URL.createObjectURL(await res.blob()),
+      cover: Number(res.headers.get('X-Mask-Cover') ?? 0),
+      resized: res.headers.get('X-Mask-Resized') === '1',
+    }
+  },
+  makeMasks: (body: MaskSource & { name: string; preview_name: string | null; params: MaskParams }): JobStart<MaskResult> =>
+    request('POST', '/api/compare/masks', body),
 
   samPreview: (o: SamOptions) => request<SamPreview>('POST', '/api/convert/sam/preview', o),
   samConvert: (o: SamOptions): JobStart<SamResult> => request('POST', '/api/convert/sam', o),

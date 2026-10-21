@@ -5,12 +5,12 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import config, overlay, sam
+from . import config, overlay, sam, wallmask
 from .datasets import IMAGE_EXTS, DatasetError, DatasetStore, clean_rename_name, compare
 from .jobs import jobs
 from .thumbs import thumbnail
@@ -299,6 +299,93 @@ def save_overlay(body: SaveOverlayBody):
             lambda j: overlay.save_overlay_dataset(
                 s, body.a, body.b, new, body.opacity, body.stretch, body.captions,
                 body.keys, body.ignore_case, body.ignore_folders, j,
+            ),
+        )
+    )
+
+
+class MaskParamsBody(BaseModel):
+    diff_threshold: int = 40
+    alpha_threshold: int = 16
+    open_px: int = 1
+    close_px: int = 4
+    dilate_px: int = 8
+    no_control: Literal["alpha", "skip"] = "alpha"
+
+    def params(self) -> wallmask.MaskParams:
+        clamp = lambda v, hi: max(0, min(hi, v))  # noqa: E731
+        return wallmask.MaskParams(
+            clamp(self.diff_threshold, 255), clamp(self.alpha_threshold, 255),
+            clamp(self.open_px, 64), clamp(self.close_px, 64), clamp(self.dilate_px, 128), self.no_control,
+        )
+
+
+class MaskSourceBody(BaseModel):
+    target: str  # painted building (training images)
+    control: str  # white building
+    ignore_case: bool = False
+    ignore_folders: bool = False
+
+
+@app.post("/api/compare/masks/info")
+def masks_info(body: MaskSourceBody):
+    m = wallmask.match(store(), body.target, body.control, body.ignore_case, body.ignore_folders)
+    paired = [k for k in m["keys"] if k in m["controls"]]
+    return {
+        "targets": len(m["keys"]),
+        "pairs": len(paired),
+        "only_target": m["only_target"],
+        "only_control": m["only_control"],
+        "sample_keys": paired[:500],
+    }
+
+
+class MaskPreviewBody(MaskSourceBody):
+    key: str
+    params: MaskParamsBody = MaskParamsBody()
+
+
+@app.post("/api/compare/masks/preview")
+async def masks_preview(body: MaskPreviewBody):
+    png, info = await run_in_threadpool(
+        wallmask.preview_png, store(), body.target, body.control, body.key, body.params.params(),
+        body.ignore_case, body.ignore_folders,
+    )
+    return Response(png, media_type="image/png", headers={
+        "X-Mask-Cover": str(info["cover"]),
+        "X-Mask-Resized": "1" if info["resized"] else "0",
+        "X-Mask-Has-Control": "1" if info["has_control"] else "0",
+        "Cache-Control": "no-store",
+    })
+
+
+class MakeMasksBody(MaskSourceBody):
+    name: str
+    preview_name: str | None = None
+    params: MaskParamsBody = MaskParamsBody()
+
+
+@app.post("/api/compare/masks")
+def make_masks(body: MakeMasksBody):
+    s = store()
+    s.dataset_dir(body.target)
+    s.dataset_dir(body.control)
+    names = [clean_rename_name(body.name)]
+    if body.preview_name:
+        names.append(clean_rename_name(body.preview_name))
+        if names[0] == names[1]:
+            raise DatasetError("마스크와 미리보기 데이터셋 이름이 같습니다.")
+    for n in names:
+        if s.dataset_dir(n, must_exist=False).exists():
+            raise DatasetError(f"이미 존재하는 데이터셋입니다: {n}", 409)
+    return job_response(
+        jobs.start(
+            "wall_masks",
+            f"'{body.target}' 마스크 생성 → '{names[0]}'",
+            names,
+            lambda j: wallmask.make_mask_dataset(
+                s, body.target, body.control, body.name, body.preview_name, body.params.params(),
+                body.ignore_case, body.ignore_folders, j,
             ),
         )
     )
