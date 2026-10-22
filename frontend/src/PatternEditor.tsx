@@ -4,6 +4,8 @@ import { errorText, Modal, Spinner, useUi } from './ui'
 import { useZoom, ZoomBadge, ZoomPane } from './zoom'
 
 type Tool = 'pen' | 'eraser' | 'fill' | 'picker'
+/** Pointer target: a real pixel, or a guide cell that paints a whole column / row. */
+type Hit = { kind: 'cell' | 'col' | 'row'; idx: number }
 
 const WHITE = '#ffffff' // empty cells are always white
 const PRESET_COLORS = ['#ffffff', '#b9b543', '#666666', '#a34f4f', '#5768bc']
@@ -87,7 +89,7 @@ export default function PatternEditor({
   const [dirty, setDirty] = useState(false)
   const history = useRef<string[][]>([])
   const future = useRef<string[][]>([])
-  const painting = useRef<{ erase: boolean } | null>(null)
+  const painting = useRef<{ erase: boolean; kind: Hit['kind'] } | null>(null)
   const gridRef = useRef<HTMLCanvasElement>(null)
   const tileSize = useRef<[number, number]>([16, 16])
   tileSize.current = [tileW, tileH]
@@ -154,38 +156,110 @@ export default function PatternEditor({
   }
 
   // ---- grid editor --------------------------------------------------------
-  const cellPx = Math.max(4, Math.floor(Math.min(440 / tileW, 440 / tileH)))
+  // Canvas layout: a row of guide cells on top (paint a whole column) and a column of
+  // guide cells on the left (paint a whole row), separated from the real pixels by GAP.
+  const cellPx = Math.max(4, Math.floor(Math.min(440 / (tileW + 1), 440 / (tileH + 1))))
+  const GAP = Math.max(4, Math.round(cellPx / 3))
+  const O = cellPx + GAP // where the real pixel grid starts
+  const [hover, setHover] = useState<Hit | null>(null)
+
+  const lineColor = (kind: 'col' | 'row', idx: number): string | null => {
+    const at = (k: number) => (kind === 'col' ? pixels[k * tileW + idx] : pixels[idx * tileW + k])
+    const n = kind === 'col' ? tileH : tileW
+    const first = at(0) || WHITE
+    for (let k = 1; k < n; k++) if ((at(k) || WHITE) !== first) return null
+    return first
+  }
+
   useEffect(() => {
     const c = gridRef.current
     if (!c) return
-    c.width = tileW * cellPx
-    c.height = tileH * cellPx
+    c.width = O + tileW * cellPx
+    c.height = O + tileH * cellPx
     const ctx = c.getContext('2d')!
+    ctx.clearRect(0, 0, c.width, c.height)
     pixels.forEach((p, i) => {
       ctx.fillStyle = p || WHITE
-      ctx.fillRect((i % tileW) * cellPx, Math.floor(i / tileW) * cellPx, cellPx, cellPx)
+      ctx.fillRect(O + (i % tileW) * cellPx, O + Math.floor(i / tileW) * cellPx, cellPx, cellPx)
     })
     if (cellPx >= 8) {
       ctx.strokeStyle = 'rgba(128,128,128,0.45)'
       ctx.lineWidth = 1
       ctx.beginPath()
       for (let x = 0; x <= tileW; x++) {
-        ctx.moveTo(x * cellPx + 0.5, 0)
-        ctx.lineTo(x * cellPx + 0.5, tileH * cellPx)
+        ctx.moveTo(O + x * cellPx + 0.5, O)
+        ctx.lineTo(O + x * cellPx + 0.5, O + tileH * cellPx)
       }
       for (let y = 0; y <= tileH; y++) {
-        ctx.moveTo(0, y * cellPx + 0.5)
-        ctx.lineTo(tileW * cellPx, y * cellPx + 0.5)
+        ctx.moveTo(O, O + y * cellPx + 0.5)
+        ctx.lineTo(O + tileW * cellPx, O + y * cellPx + 0.5)
       }
       ctx.stroke()
     }
-  }, [tileW, tileH, pixels, cellPx])
 
-  const cellAt = (e: PointerEvent) => {
-    const r = gridRef.current!.getBoundingClientRect()
-    const x = Math.floor(((e.clientX - r.left) / r.width) * tileW)
-    const y = Math.floor(((e.clientY - r.top) / r.height) * tileH)
-    return x >= 0 && y >= 0 && x < tileW && y < tileH ? y * tileW + x : -1
+    // Guide cells: smaller, dashed, uniform line colour or a hatch when the line is mixed.
+    const inset = Math.max(1, Math.round(cellPx * 0.18))
+    const guide = (x: number, y: number, col: string | null, active: boolean) => {
+      const gx = x + inset
+      const gy = y + inset
+      const gs = cellPx - inset * 2
+      if (col) {
+        ctx.fillStyle = col
+        ctx.fillRect(gx, gy, gs, gs)
+      } else {
+        ctx.fillStyle = '#2b2f38'
+        ctx.fillRect(gx, gy, gs, gs)
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(gx, gy, gs, gs)
+        ctx.clip()
+        ctx.strokeStyle = 'rgba(160,160,170,0.55)'
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        for (let d = -gs; d < gs; d += 4) {
+          ctx.moveTo(gx + d, gy + gs)
+          ctx.lineTo(gx + d + gs, gy)
+        }
+        ctx.stroke()
+        ctx.restore()
+      }
+      ctx.save()
+      ctx.setLineDash(active ? [] : [3, 2])
+      ctx.strokeStyle = active ? '#8b7fff' : 'rgba(220,220,230,0.7)'
+      ctx.lineWidth = active ? 2 : 1
+      ctx.strokeRect(gx + 0.5, gy + 0.5, gs - 1, gs - 1)
+      ctx.restore()
+    }
+    for (let x = 0; x < tileW; x++)
+      guide(O + x * cellPx, 0, lineColor('col', x), hover?.kind === 'col' && hover.idx === x)
+    for (let y = 0; y < tileH; y++)
+      guide(0, O + y * cellPx, lineColor('row', y), hover?.kind === 'row' && hover.idx === y)
+
+    // Highlight the line a hovered guide cell would paint.
+    if (hover && hover.kind !== 'cell') {
+      ctx.fillStyle = 'rgba(139,127,255,0.22)'
+      if (hover.kind === 'col') ctx.fillRect(O + hover.idx * cellPx, O, cellPx, tileH * cellPx)
+      else ctx.fillRect(O, O + hover.idx * cellPx, tileW * cellPx, cellPx)
+    }
+  }, [tileW, tileH, pixels, cellPx, O, hover])
+
+  /** What is under the pointer. With ``lock`` (during a drag) only that kind is returned. */
+  const hitAt = (e: PointerEvent, lock?: Hit['kind']): Hit | null => {
+    const c = gridRef.current!
+    const r = c.getBoundingClientRect()
+    const cx = ((e.clientX - r.left) / r.width) * c.width
+    const cy = ((e.clientY - r.top) / r.height) * c.height
+    const gx = Math.floor((cx - O) / cellPx)
+    const gy = Math.floor((cy - O) / cellPx)
+    const inX = cx >= O && gx >= 0 && gx < tileW
+    const inY = cy >= O && gy >= 0 && gy < tileH
+    // While dragging along a guide, keep painting lines even if the pointer drifts.
+    if (lock === 'col') return inX ? { kind: 'col', idx: gx } : null
+    if (lock === 'row') return inY ? { kind: 'row', idx: gy } : null
+    if (inX && inY) return { kind: 'cell', idx: gy * tileW + gx }
+    if (inX && cy >= 0 && cy < cellPx) return { kind: 'col', idx: gx }
+    if (inY && cx >= 0 && cx < cellPx) return { kind: 'row', idx: gy }
+    return null
   }
 
   const floodFill = (src: string[], start: number, value: string) => {
@@ -207,41 +281,51 @@ export default function PatternEditor({
     return out
   }
 
-  // Functional update so fast strokes never drop cells between renders.
-  const paintAt = (i: number, erase: boolean) => {
-    if (i < 0) return
+  // Functional updates so fast strokes never drop cells between renders.
+  const paintHit = (h: Hit | null, erase: boolean) => {
+    if (!h) return
     const value = erase ? WHITE : color
     setPixels((p) => {
-      if (p[i] === value) return p
+      const idx =
+        h.kind === 'cell'
+          ? [h.idx]
+          : h.kind === 'col'
+            ? Array.from({ length: tileH }, (_, y) => y * tileW + h.idx)
+            : Array.from({ length: tileW }, (_, x) => h.idx * tileW + x)
+      if (idx.every((i) => p[i] === value)) return p
       const next = [...p]
-      next[i] = value
+      for (const i of idx) next[i] = value
       return next
     })
     setDirty(true)
   }
 
   const onPointerDown = (e: PointerEvent) => {
-    const i = cellAt(e)
-    if (i < 0) return
+    const h = hitAt(e)
+    if (!h) return
     e.preventDefault()
     const erase = e.button === 2 || tool === 'eraser'
     if (tool === 'picker') {
-      setColor(pixels[i] || WHITE)
+      const picked = h.kind === 'cell' ? pixels[h.idx] || WHITE : lineColor(h.kind, h.idx)
+      if (picked) setColor(picked)
       setTool('pen')
       return
     }
     record()
-    if (tool === 'fill') {
-      setPixels((p) => floodFill(p, i, erase ? WHITE : color))
+    if (tool === 'fill' && h.kind === 'cell') {
+      setPixels((p) => floodFill(p, h.idx, erase ? WHITE : color))
       setDirty(true)
       return
     }
+    // Guide cells always paint their whole line (also with the fill tool).
     ;(e.target as Element).setPointerCapture(e.pointerId)
-    painting.current = { erase }
-    paintAt(i, erase)
+    painting.current = { erase, kind: h.kind }
+    paintHit(h, erase)
   }
   const onPointerMove = (e: PointerEvent) => {
-    if (painting.current) paintAt(cellAt(e), painting.current.erase)
+    if (painting.current) paintHit(hitAt(e, painting.current.kind), painting.current.erase)
+    const h = hitAt(e, painting.current?.kind)
+    setHover((cur) => (cur?.kind === h?.kind && cur?.idx === h?.idx ? cur : h))
   }
   const onPointerUp = () => {
     painting.current = null
@@ -553,9 +637,13 @@ export default function PatternEditor({
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerCancel={onPointerUp}
+              onPointerLeave={() => setHover(null)}
               onContextMenu={(e) => e.preventDefault()}
               style={{ cursor: tool === 'picker' ? 'copy' : 'crosshair' }}
             />
+            <span className="muted small">
+              위·왼쪽 점선 칸 = 줄 가이드: 칠하면 세로줄(위) / 가로줄(왼쪽) 전체가 칠해집니다
+            </span>
             <span className="muted small">
               {tileW}×{tileH} 타일 → {outW ?? '?'}×{outH ?? '?'} px 로 늘려서 저장
             </span>
