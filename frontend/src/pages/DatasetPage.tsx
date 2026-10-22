@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, type Item } from '../api'
+import { api, type Item, type PatternList } from '../api'
 import { CaptionEditor, Media, useArrowKeys } from '../components'
 import AlphaMaskDialog from '../AlphaMaskDialog'
+import PatternEditor from '../PatternEditor'
 import DuplicateDialog from '../DuplicateDialog'
 import { CancelledError, useJobs } from '../jobs'
 import RenameDialog from '../RenameDialog'
@@ -28,6 +29,8 @@ export default function DatasetPage() {
   const [renaming, setRenaming] = useState(false)
   const [duplicating, setDuplicating] = useState(false)
   const [alphaMasking, setAlphaMasking] = useState(false)
+  const [patterns, setPatterns] = useState<PatternList | null>(null)
+  const [patternItem, setPatternItem] = useState<Item | null>(null)
   const navigate = useNavigate()
 
   const load = useCallback(async () => {
@@ -39,10 +42,18 @@ export default function DatasetPage() {
     }
   }, [name])
 
+  const loadPatterns = useCallback(() => {
+    api
+      .listPatterns(name)
+      .then(setPatterns)
+      .catch(() => setPatterns(null))
+  }, [name])
+
   useEffect(() => {
     load()
+    loadPatterns()
     setSelected(new Set())
-  }, [load])
+  }, [load, loadPatterns])
 
   const shown = useMemo(() => {
     if (!items) return []
@@ -318,8 +329,23 @@ export default function DatasetPage() {
                 {it.is_flip && <span className="tag">flip</span>}
               </div>
               <div className="tile-body">
-                <div className="tile-name" title={it.path}>
-                  {it.path}
+                <div className="tile-name-row">
+                  <div className="tile-name" title={it.path}>
+                    {it.path}
+                  </div>
+                  {it.kind === 'image' && (
+                    <button
+                      className={`pattern-btn ${patterns && it.key in patterns.items ? 'has' : ''}`}
+                      title={
+                        patterns && it.key in patterns.items
+                          ? `${patterns.dataset} 에 패턴이 있습니다 (편집)`
+                          : '패턴 가이드 그리기 / 기존 패턴 복제'
+                      }
+                      onClick={() => setPatternItem(it)}
+                    >
+                      {patterns && it.key in patterns.items ? '▦ 패턴 ✓' : '▦ 패턴'}
+                    </button>
+                  )}
                 </div>
                 <CaptionEditor dataset={name} item={it} onSaved={(c) => updateCaption(it.path, c)} />
               </div>
@@ -338,6 +364,15 @@ export default function DatasetPage() {
           onClose={() => setViewing(null)}
           onCaption={updateCaption}
           onDelete={(it) => deletePaths([it.path])}
+        />
+      )}
+      {patternItem && (
+        <PatternEditor
+          dataset={name}
+          item={patternItem}
+          patterns={patterns}
+          onClose={() => setPatternItem(null)}
+          onSaved={loadPatterns}
         />
       )}
       {alphaMasking && <AlphaMaskDialog name={name} onClose={() => setAlphaMasking(false)} onCreated={() => {}} />}

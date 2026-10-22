@@ -143,6 +143,33 @@ export interface AlphaMaskResult {
   empty: string[]
 }
 
+export interface PatternSpec {
+  w: number
+  h: number
+  cell: number
+  pixels: string[] // w*h, "#rrggbb" or "" (transparent), row-major
+  anchor: 'image' | 'bbox'
+  offset_x: number
+  offset_y: number
+  clip: 'none' | 'opaque'
+  background: string
+}
+
+export interface PatternList {
+  dataset: string
+  exists: boolean
+  items: Record<string, string> // item key -> pattern digest ("" = not editable)
+  unique: { digest: string; spec: PatternSpec; count: number; keys: string[] }[]
+}
+
+export interface PatternTarget {
+  width: number
+  height: number
+  bbox: [number, number, number, number] | null
+  spec: PatternSpec | null
+  mirrored: boolean
+}
+
 type MaskSource = { target: string; control: string } & CompareOptions
 
 export class ApiError extends Error {
@@ -261,6 +288,14 @@ export const api = {
   },
   makeMasks: (body: MaskSource & { name: string; preview_name: string | null; params: MaskParams }): JobStart<MaskResult> =>
     request('POST', '/api/compare/masks', body),
+
+  listPatterns: (name: string) => request<PatternList>('GET', `${ds(name)}/patterns`),
+  patternTarget: (name: string, path: string) =>
+    request<PatternTarget>('GET', `${ds(name)}/patterns/target?${qs({ path })}`),
+  savePattern: (name: string, path: string, spec: PatternSpec) =>
+    request<{ dataset: string; written: string[] }>('PUT', `${ds(name)}/patterns`, { path, spec }),
+  deletePattern: (name: string, path: string) =>
+    request<{ removed: string[] }>('DELETE', `${ds(name)}/patterns?${qs({ path })}`),
 
   alphaMaskInfo: (name: string) => request<AlphaMaskInfo>('GET', `${ds(name)}/alpha-mask/info`),
   alphaMaskPreview: async (

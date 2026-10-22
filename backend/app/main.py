@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import alphamask, config, overlay, sam, wallmask
+from . import alphamask, config, overlay, pattern, sam, wallmask
 from .datasets import IMAGE_EXTS, DatasetError, DatasetStore, clean_rename_name, compare
 from .jobs import jobs
 from .thumbs import thumbnail
@@ -180,6 +180,31 @@ def delete_items(name: str, body: PathsBody):
         return {"deleted": s.delete_items(name, body.paths, j), "flips_deleted": 0}
 
     return job_response(jobs.start("delete_items", f"'{name}' 항목 {len(body.paths)}개 삭제", [name], run))
+
+
+@app.get("/api/datasets/{name}/patterns")
+def list_patterns(name: str):
+    return pattern.list_patterns(store(), name)
+
+
+@app.get("/api/datasets/{name}/patterns/target")
+async def pattern_target(name: str, path: str):
+    return await run_in_threadpool(pattern.target_info, store(), name, path)
+
+
+class SavePatternBody(BaseModel):
+    path: str
+    spec: pattern.PatternSpec
+
+
+@app.put("/api/datasets/{name}/patterns")
+async def save_pattern(name: str, body: SavePatternBody):
+    return await run_in_threadpool(pattern.save_pattern, store(), name, body.path, body.spec)
+
+
+@app.delete("/api/datasets/{name}/patterns")
+def delete_pattern(name: str, path: str):
+    return pattern.delete_pattern(store(), name, path)
 
 
 @app.get("/api/datasets/{name}/alpha-mask/info")
