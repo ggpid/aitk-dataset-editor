@@ -129,6 +129,20 @@ export interface MaskResult {
   warnings: { key: string; notes: string[] }[]
 }
 
+export interface AlphaMaskInfo {
+  images: number
+  flips: number
+  sample_paths: string[]
+}
+
+export interface AlphaMaskResult {
+  name: string
+  preview: string | null
+  made: number
+  no_alpha: string[]
+  empty: string[]
+}
+
 type MaskSource = { target: string; control: string } & CompareOptions
 
 export class ApiError extends Error {
@@ -247,6 +261,38 @@ export const api = {
   },
   makeMasks: (body: MaskSource & { name: string; preview_name: string | null; params: MaskParams }): JobStart<MaskResult> =>
     request('POST', '/api/compare/masks', body),
+
+  alphaMaskInfo: (name: string) => request<AlphaMaskInfo>('GET', `${ds(name)}/alpha-mask/info`),
+  alphaMaskPreview: async (
+    name: string,
+    body: { path: string; threshold: number; grow_px: number },
+    signal?: AbortSignal,
+  ) => {
+    const res = await fetch(`${ds(name)}/alpha-mask/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    })
+    if (!res.ok) {
+      let msg = `${res.status} ${res.statusText}`
+      try {
+        msg = (await res.json()).detail ?? msg
+      } catch {
+        /* not json */
+      }
+      throw new ApiError(msg, res.status)
+    }
+    return {
+      url: URL.createObjectURL(await res.blob()),
+      cover: Number(res.headers.get('X-Mask-Cover') ?? 0),
+      hasAlpha: res.headers.get('X-Mask-Has-Alpha') === '1',
+    }
+  },
+  makeAlphaMasks: (
+    name: string,
+    body: { name: string; preview_name: string | null; threshold: number; grow_px: number; include_flips: boolean },
+  ): JobStart<AlphaMaskResult> => request('POST', `${ds(name)}/alpha-mask`, body),
 
   samPreview: (o: SamOptions) => request<SamPreview>('POST', '/api/convert/sam/preview', o),
   samConvert: (o: SamOptions): JobStart<SamResult> => request('POST', '/api/convert/sam', o),

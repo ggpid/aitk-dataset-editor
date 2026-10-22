@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, type Item } from '../api'
 import { CaptionEditor, Media, useArrowKeys } from '../components'
+import AlphaMaskDialog from '../AlphaMaskDialog'
 import DuplicateDialog from '../DuplicateDialog'
 import { CancelledError, useJobs } from '../jobs'
 import RenameDialog from '../RenameDialog'
@@ -26,6 +27,7 @@ export default function DatasetPage() {
   const fileInput = useRef<HTMLInputElement>(null)
   const [renaming, setRenaming] = useState(false)
   const [duplicating, setDuplicating] = useState(false)
+  const [alphaMasking, setAlphaMasking] = useState(false)
   const navigate = useNavigate()
 
   const load = useCallback(async () => {
@@ -224,6 +226,13 @@ export default function DatasetPage() {
           </button>
         </h1>
         <div className="row">
+          <button
+            onClick={() => setAlphaMasking(true)}
+            disabled={busy || !items.length}
+            title="불투명한 부분은 흰색, 투명한 부분은 검은색인 마스크 데이터셋을 만듭니다"
+          >
+            🎭 불투명 영역 마스크
+          </button>
           <button onClick={() => setDuplicating(true)} disabled={busy}>
             ⧉ 복제
           </button>
@@ -331,6 +340,7 @@ export default function DatasetPage() {
           onDelete={(it) => deletePaths([it.path])}
         />
       )}
+      {alphaMasking && <AlphaMaskDialog name={name} onClose={() => setAlphaMasking(false)} onCreated={() => {}} />}
       {duplicating && (
         <DuplicateDialog
           name={name}

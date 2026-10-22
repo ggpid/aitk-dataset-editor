@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import config, overlay, sam, wallmask
+from . import alphamask, config, overlay, sam, wallmask
 from .datasets import IMAGE_EXTS, DatasetError, DatasetStore, clean_rename_name, compare
 from .jobs import jobs
 from .thumbs import thumbnail
@@ -180,6 +180,63 @@ def delete_items(name: str, body: PathsBody):
         return {"deleted": s.delete_items(name, body.paths, j), "flips_deleted": 0}
 
     return job_response(jobs.start("delete_items", f"'{name}' 항목 {len(body.paths)}개 삭제", [name], run))
+
+
+@app.get("/api/datasets/{name}/alpha-mask/info")
+def alpha_mask_info(name: str):
+    return alphamask.info(store(), name)
+
+
+class AlphaMaskPreviewBody(BaseModel):
+    path: str
+    threshold: int = 16
+    grow_px: int = 0
+
+
+@app.post("/api/datasets/{name}/alpha-mask/preview")
+async def alpha_mask_preview(name: str, body: AlphaMaskPreviewBody):
+    png, info = await run_in_threadpool(
+        alphamask.preview_png, store(), name, body.path,
+        max(0, min(255, body.threshold)), max(-128, min(128, body.grow_px)),
+    )
+    return Response(png, media_type="image/png", headers={
+        "X-Mask-Cover": str(info["cover"]),
+        "X-Mask-Has-Alpha": "1" if info["had_alpha"] else "0",
+        "Cache-Control": "no-store",
+    })
+
+
+class AlphaMaskBody(BaseModel):
+    name: str
+    preview_name: str | None = None
+    threshold: int = 16
+    grow_px: int = 0
+    include_flips: bool = True
+
+
+@app.post("/api/datasets/{name}/alpha-mask")
+def make_alpha_masks(name: str, body: AlphaMaskBody):
+    s = store()
+    s.dataset_dir(name)
+    names = [clean_rename_name(body.name)]
+    if body.preview_name:
+        names.append(clean_rename_name(body.preview_name))
+        if names[0] == names[1]:
+            raise DatasetError("마스크와 미리보기 데이터셋 이름이 같습니다.")
+    for n in names:
+        if s.dataset_dir(n, must_exist=False).exists():
+            raise DatasetError(f"이미 존재하는 데이터셋입니다: {n}", 409)
+    return job_response(
+        jobs.start(
+            "alpha_masks",
+            f"'{name}' 불투명 영역 마스크 → '{names[0]}'",
+            names,
+            lambda j: alphamask.make_alpha_mask_dataset(
+                s, name, body.name, body.preview_name,
+                max(0, min(255, body.threshold)), max(-128, min(128, body.grow_px)), body.include_flips, j,
+            ),
+        )
+    )
 
 
 @app.post("/api/datasets/{name}/flip")
