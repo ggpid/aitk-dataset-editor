@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react'
 import { api, fileUrl, type Item, type PatternList, type PatternSpec, type PatternTarget } from './api'
 import { errorText, Modal, Spinner, useUi } from './ui'
+import { useZoom, ZoomBadge, ZoomPane } from './zoom'
 
 type Tool = 'pen' | 'eraser' | 'fill' | 'picker'
 
+const WHITE = '#ffffff' // empty cells are always white
+const PRESET_COLORS = ['#ffffff', '#b9b543', '#666666', '#a34f4f', '#5768bc']
 const SIZE_PRESETS: [number, number][] = [
   [8, 8],
   [16, 16],
@@ -12,55 +15,20 @@ const SIZE_PRESETS: [number, number][] = [
   [16, 1],
   [8, 32],
 ]
-const BASE_COLORS = ['#ffffff', '#000000', '#ff0000', '#00ff00', '#0000ff', '#ffff00', '#00ffff', '#ff00ff', '#808080']
-const RECENT_KEY = 'aitk-editor.pattern.recent'
 
-export const emptySpec = (w = 16, h = 16): PatternSpec => ({
-  w,
-  h,
-  cell: 8,
-  pixels: Array(w * h).fill(''),
-  anchor: 'bbox',
-  offset_x: 0,
-  offset_y: 0,
-  clip: 'none',
-  background: '',
-})
+const sizeKey = (dataset: string) => `aitk-editor.pattern.size.${dataset}`
 
-const hexRgba = (hex: string): [number, number, number, number] =>
-  hex ? [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16), 255] : [0, 0, 0, 0]
-
-const mod = (a: number, n: number) => ((a % n) + n) % n
-
-/**
- * Render a spec at an image's size: same formula as backend pattern.render
- * (tile index = floor((x - origin) / cell) mod w).
- */
-export function renderGuide(spec: PatternSpec, t: PatternTarget, alpha: Uint8ClampedArray | null): ImageData {
-  const { width, height } = t
-  const img = new ImageData(width, height)
-  const tile = spec.pixels.map((p) => (p ? hexRgba(p) : spec.background ? hexRgba(spec.background) : hexRgba('')))
-  const ax = spec.anchor === 'bbox' && t.bbox ? t.bbox[0] : 0
-  const ay = spec.anchor === 'bbox' && t.bbox ? t.bbox[1] : 0
-  const ox = ax + spec.offset_x
-  const oy = ay + spec.offset_y
-  const cols = new Int32Array(width)
-  for (let x = 0; x < width; x++) cols[x] = mod(Math.floor((x - ox) / spec.cell), spec.w)
-  const d = img.data
-  for (let y = 0; y < height; y++) {
-    const row = mod(Math.floor((y - oy) / spec.cell), spec.h) * spec.w
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4
-      if (spec.clip === 'opaque' && alpha && alpha[y * width + x] <= 16) continue
-      const c = tile[row + cols[x]]
-      d[i] = c[0]
-      d[i + 1] = c[1]
-      d[i + 2] = c[2]
-      d[i + 3] = c[3]
-    }
+function savedSize(dataset: string): [number, number] | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(sizeKey(dataset)) ?? 'null')
+    return Array.isArray(v) && v.length === 2 ? [v[0], v[1]] : null
+  } catch {
+    return null
   }
-  return img
 }
+
+const blankTile = (w: number, h: number) => Array(w * h).fill(WHITE) as string[]
+const mod = (a: number, n: number) => ((a % n) + n) % n
 
 /** Small picture of a tile (for the "existing patterns" list). */
 export function TileThumb({ spec, size = 56 }: { spec: PatternSpec; size?: number }) {
@@ -71,177 +39,170 @@ export function TileThumb({ spec, size = 56 }: { spec: PatternSpec; size?: numbe
     c.width = spec.w
     c.height = spec.h
     const ctx = c.getContext('2d')!
-    const img = ctx.createImageData(spec.w, spec.h)
-    spec.pixels.forEach((p, i) => img.data.set(hexRgba(p || spec.background), i * 4))
-    ctx.putImageData(img, 0, 0)
+    spec.pixels.forEach((p, i) => {
+      ctx.fillStyle = p || WHITE
+      ctx.fillRect(i % spec.w, Math.floor(i / spec.w), 1, 1)
+    })
   }, [spec])
   const scale = size / Math.max(spec.w, spec.h)
   return (
     <canvas
       ref={ref}
-      className="tile-thumb checker"
-      style={{ width: spec.w * scale, height: spec.h * scale, imageRendering: 'pixelated' }}
+      className="tile-thumb"
+      style={{ width: Math.max(4, spec.w * scale), height: Math.max(4, spec.h * scale), imageRendering: 'pixelated' }}
     />
   )
 }
 
 export default function PatternEditor({
   dataset,
-  item,
+  items,
+  startIndex,
   patterns,
   onClose,
   onSaved,
 }: {
   dataset: string
-  item: Item
+  items: Item[] // image items in the order shown on the page (for 이전/다음)
+  startIndex: number
   patterns: PatternList | null
   onClose: () => void
   onSaved: () => void
 }) {
   const { toast, confirm } = useUi()
+  const [index, setIndex] = useState(startIndex)
+  const item = items[index]
   const [target, setTarget] = useState<PatternTarget | null>(null)
-  const [spec, setSpec] = useState<PatternSpec>(emptySpec())
-  const [hasExisting, setHasExisting] = useState(false)
-  const [sizeW, setSizeW] = useState(16)
+  const [tileW, setTileW] = useState(16)
+  const [tileH, setTileH] = useState(16)
+  const [pixels, setPixels] = useState<string[]>(blankTile(16, 16))
+  const [sizeW, setSizeW] = useState(16) // tile size inputs (applied with 적용)
   const [sizeH, setSizeH] = useState(16)
+  const [outW, setOutW] = useState<number | null>(null)
+  const [outH, setOutH] = useState<number | null>(null)
+  const [hasExisting, setHasExisting] = useState(false)
   const [tool, setTool] = useState<Tool>('pen')
-  const [color, setColor] = useState('#ffffff')
-  const [recent, setRecent] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]')
-    } catch {
-      return []
-    }
-  })
-  const [overlay, setOverlay] = useState(60)
+  const [color, setColor] = useState(PRESET_COLORS[1])
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
   const history = useRef<string[][]>([])
   const future = useRef<string[][]>([])
   const painting = useRef<{ erase: boolean } | null>(null)
   const gridRef = useRef<HTMLCanvasElement>(null)
-  const previewRef = useRef<HTMLCanvasElement>(null)
-  const alphaRef = useRef<Uint8ClampedArray | null>(null)
-  const [imgReady, setImgReady] = useState(false)
-  const imgRef = useRef<HTMLImageElement | null>(null)
+  const tileSize = useRef<[number, number]>([16, 16])
+  tileSize.current = [tileW, tileH]
+  const commonSize = useRef(patterns?.common_size ?? null)
+  commonSize.current = patterns?.common_size ?? null
+  const zoom = useZoom(item?.path)
 
-  // Load the image's geometry and its existing pattern (if any).
+  // Load the item: its existing pattern, or a blank white tile (current tile size kept).
   useEffect(() => {
+    if (!item) return
+    let cancelled = false
+    setTarget(null)
     api
       .patternTarget(dataset, item.path)
       .then((t) => {
+        if (cancelled) return
         setTarget(t)
+        history.current = []
+        future.current = []
+        setDirty(false)
+        setHasExisting(!!t.spec || t.mirrored)
         if (t.spec) {
-          setSpec(t.spec)
+          setTileW(t.spec.w)
+          setTileH(t.spec.h)
           setSizeW(t.spec.w)
           setSizeH(t.spec.h)
-          setHasExisting(true)
-        } else if (t.mirrored) {
-          setHasExisting(true)
+          setPixels(t.spec.pixels)
+          setOutW(t.spec.out_w)
+          setOutH(t.spec.out_h)
+        } else {
+          setPixels(blankTile(...tileSize.current))
+          // Output size: last set in this dataset → most used in its patterns → the image's size.
+          const s = savedSize(dataset) ?? commonSize.current ?? [t.width, t.height]
+          setOutW(s[0])
+          setOutH(s[1])
         }
       })
       .catch((e) => toast(errorText(e), 'error'))
-  }, [dataset, item.path, toast])
-
-  // Source image (for the preview underlay and the opaque-area clip).
-  useEffect(() => {
-    const img = new Image()
-    img.onload = () => {
-      imgRef.current = img
-      const c = document.createElement('canvas')
-      c.width = img.naturalWidth
-      c.height = img.naturalHeight
-      const ctx = c.getContext('2d')!
-      ctx.drawImage(img, 0, 0)
-      const data = ctx.getImageData(0, 0, c.width, c.height).data
-      const a = new Uint8ClampedArray(c.width * c.height)
-      for (let i = 0; i < a.length; i++) a[i] = data[i * 4 + 3]
-      alphaRef.current = a
-      setImgReady(true)
+    return () => {
+      cancelled = true
     }
-    img.src = fileUrl(dataset, item)
-  }, [dataset, item])
+  }, [dataset, item, toast])
 
-  const update = useCallback((next: Partial<PatternSpec>, record = true) => {
-    setSpec((s) => {
-      if (record && next.pixels) {
-        history.current.push(s.pixels)
-        if (history.current.length > 200) history.current.shift()
-        future.current = []
-      }
-      return { ...s, ...next }
+  const record = useCallback(() => {
+    setPixels((p) => {
+      history.current.push(p)
+      if (history.current.length > 200) history.current.shift()
+      future.current = []
+      return p
     })
-    setDirty(true)
   }, [])
 
-  const pickColor = (c: string) => {
-    setColor(c)
-    if (!c) return
-    setRecent((r) => {
-      const next = [c, ...r.filter((x) => x !== c)].slice(0, 12)
-      try {
-        localStorage.setItem(RECENT_KEY, JSON.stringify(next))
-      } catch {
-        /* ignore */
-      }
-      return next
-    })
+  const setOut = (w: number, h: number) => {
+    const cw = Math.max(1, Math.min(8192, Math.round(w) || 1))
+    const ch = Math.max(1, Math.min(8192, Math.round(h) || 1))
+    setOutW(cw)
+    setOutH(ch)
+    setDirty(true)
+    try {
+      localStorage.setItem(sizeKey(dataset), JSON.stringify([cw, ch]))
+    } catch {
+      /* ignore */
+    }
   }
 
   // ---- grid editor --------------------------------------------------------
-  const zoom = Math.max(4, Math.floor(Math.min(420 / spec.w, 420 / spec.h)))
+  const cellPx = Math.max(4, Math.floor(Math.min(440 / tileW, 440 / tileH)))
   useEffect(() => {
     const c = gridRef.current
     if (!c) return
-    c.width = spec.w * zoom
-    c.height = spec.h * zoom
+    c.width = tileW * cellPx
+    c.height = tileH * cellPx
     const ctx = c.getContext('2d')!
-    // checkerboard for transparency
-    for (let y = 0; y < spec.h; y++)
-      for (let x = 0; x < spec.w; x++) {
-        const p = spec.pixels[y * spec.w + x]
-        if (p) ctx.fillStyle = p
-        else ctx.fillStyle = (x + y) % 2 ? '#3a3f4b' : '#2b2f38'
-        ctx.fillRect(x * zoom, y * zoom, zoom, zoom)
-      }
-    if (zoom >= 8) {
-      ctx.strokeStyle = 'rgba(128,128,128,0.35)'
+    pixels.forEach((p, i) => {
+      ctx.fillStyle = p || WHITE
+      ctx.fillRect((i % tileW) * cellPx, Math.floor(i / tileW) * cellPx, cellPx, cellPx)
+    })
+    if (cellPx >= 8) {
+      ctx.strokeStyle = 'rgba(128,128,128,0.45)'
       ctx.lineWidth = 1
       ctx.beginPath()
-      for (let x = 0; x <= spec.w; x++) {
-        ctx.moveTo(x * zoom + 0.5, 0)
-        ctx.lineTo(x * zoom + 0.5, spec.h * zoom)
+      for (let x = 0; x <= tileW; x++) {
+        ctx.moveTo(x * cellPx + 0.5, 0)
+        ctx.lineTo(x * cellPx + 0.5, tileH * cellPx)
       }
-      for (let y = 0; y <= spec.h; y++) {
-        ctx.moveTo(0, y * zoom + 0.5)
-        ctx.lineTo(spec.w * zoom, y * zoom + 0.5)
+      for (let y = 0; y <= tileH; y++) {
+        ctx.moveTo(0, y * cellPx + 0.5)
+        ctx.lineTo(tileW * cellPx, y * cellPx + 0.5)
       }
       ctx.stroke()
     }
-  }, [spec.w, spec.h, spec.pixels, zoom])
+  }, [tileW, tileH, pixels, cellPx])
 
   const cellAt = (e: PointerEvent) => {
     const r = gridRef.current!.getBoundingClientRect()
-    const x = Math.floor(((e.clientX - r.left) / r.width) * spec.w)
-    const y = Math.floor(((e.clientY - r.top) / r.height) * spec.h)
-    return x >= 0 && y >= 0 && x < spec.w && y < spec.h ? y * spec.w + x : -1
+    const x = Math.floor(((e.clientX - r.left) / r.width) * tileW)
+    const y = Math.floor(((e.clientY - r.top) / r.height) * tileH)
+    return x >= 0 && y >= 0 && x < tileW && y < tileH ? y * tileW + x : -1
   }
 
-  const floodFill = (pixels: string[], start: number, value: string) => {
-    const from = pixels[start]
-    if (from === value) return pixels
-    const out = [...pixels]
+  const floodFill = (src: string[], start: number, value: string) => {
+    const from = src[start]
+    if (from === value) return src
+    const out = [...src]
     const stack = [start]
     while (stack.length) {
       const i = stack.pop()!
       if (out[i] !== from) continue
       out[i] = value
-      const x = i % spec.w
-      const y = Math.floor(i / spec.w)
+      const x = i % tileW
+      const y = Math.floor(i / tileW)
       if (x > 0) stack.push(i - 1)
-      if (x < spec.w - 1) stack.push(i + 1)
-      if (y > 0) stack.push(i - spec.w)
-      if (y < spec.h - 1) stack.push(i + spec.w)
+      if (x < tileW - 1) stack.push(i + 1)
+      if (y > 0) stack.push(i - tileW)
+      if (y < tileH - 1) stack.push(i + tileW)
     }
     return out
   }
@@ -249,12 +210,12 @@ export default function PatternEditor({
   // Functional update so fast strokes never drop cells between renders.
   const paintAt = (i: number, erase: boolean) => {
     if (i < 0) return
-    const value = erase ? '' : color
-    setSpec((s) => {
-      if (s.pixels[i] === value) return s
-      const pixels = [...s.pixels]
-      pixels[i] = value
-      return { ...s, pixels }
+    const value = erase ? WHITE : color
+    setPixels((p) => {
+      if (p[i] === value) return p
+      const next = [...p]
+      next[i] = value
+      return next
     })
     setDirty(true)
   }
@@ -265,20 +226,18 @@ export default function PatternEditor({
     e.preventDefault()
     const erase = e.button === 2 || tool === 'eraser'
     if (tool === 'picker') {
-      const c = spec.pixels[i]
-      if (c) pickColor(c)
+      setColor(pixels[i] || WHITE)
       setTool('pen')
       return
     }
+    record()
     if (tool === 'fill') {
-      update({ pixels: floodFill(spec.pixels, i, erase ? '' : color) })
+      setPixels((p) => floodFill(p, i, erase ? WHITE : color))
+      setDirty(true)
       return
     }
     ;(e.target as Element).setPointerCapture(e.pointerId)
     painting.current = { erase }
-    // One undo step per stroke: record before the first cell only.
-    history.current.push(spec.pixels)
-    future.current = []
     paintAt(i, erase)
   }
   const onPointerMove = (e: PointerEvent) => {
@@ -286,123 +245,88 @@ export default function PatternEditor({
   }
   const onPointerUp = () => {
     painting.current = null
-    if (tool === 'pen' || tool === 'eraser') pickColor(color)
   }
 
   const undo = useCallback(() => {
     const prev = history.current.pop()
     if (!prev) return
-    setSpec((s) => {
-      future.current.push(s.pixels)
-      return prev.length === s.w * s.h ? { ...s, pixels: prev } : s
+    setPixels((p) => {
+      future.current.push(p)
+      return prev.length === p.length ? prev : p
     })
   }, [])
   const redo = useCallback(() => {
     const next = future.current.pop()
     if (!next) return
-    setSpec((s) => {
-      history.current.push(s.pixels)
-      return next.length === s.w * s.h ? { ...s, pixels: next } : s
+    setPixels((p) => {
+      history.current.push(p)
+      return next.length === p.length ? next : p
     })
   }, [])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement
-      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        e.preventDefault()
-        if (e.shiftKey) redo()
-        else undo()
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-        e.preventDefault()
-        redo()
-      } else if (!e.ctrlKey && !e.metaKey) {
-        const k = e.key.toLowerCase()
-        if (k === 'b') setTool('pen')
-        if (k === 'e') setTool('eraser')
-        if (k === 'g') setTool('fill')
-        if (k === 'i') setTool('picker')
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [undo, redo])
-
-  const resize = (w: number, h: number) => {
+  const resizeTile = (w: number, h: number) => {
     w = Math.max(1, Math.min(256, Math.round(w) || 1))
     h = Math.max(1, Math.min(256, Math.round(h) || 1))
-    // Keep what is already drawn (top-left aligned).
-    const pixels = Array(w * h).fill('')
-    for (let y = 0; y < Math.min(h, spec.h); y++)
-      for (let x = 0; x < Math.min(w, spec.w); x++) pixels[y * w + x] = spec.pixels[y * spec.w + x]
+    // Keep what is already drawn (top-left aligned); new cells are white.
+    const next = blankTile(w, h)
+    for (let y = 0; y < Math.min(h, tileH); y++)
+      for (let x = 0; x < Math.min(w, tileW); x++) next[y * w + x] = pixels[y * tileW + x]
     history.current = []
     future.current = []
+    setTileW(w)
+    setTileH(h)
     setSizeW(w)
     setSizeH(h)
-    update({ w, h, pixels }, false)
-  }
-
-  const shift = (dx: number, dy: number) => {
-    const pixels = spec.pixels.map((_, i) => {
-      const x = i % spec.w
-      const y = Math.floor(i / spec.w)
-      return spec.pixels[mod(y - dy, spec.h) * spec.w + mod(x - dx, spec.w)]
-    })
-    update({ pixels })
-  }
-
-  const loadSpec = (s: PatternSpec) => {
-    history.current.push(spec.pixels)
-    setSpec(s)
-    setSizeW(s.w)
-    setSizeH(s.h)
+    setPixels(next)
     setDirty(true)
   }
 
-  // ---- full-size preview --------------------------------------------------
-  const guide = useMemo(
-    () => (target && imgReady ? renderGuide(spec, target, alphaRef.current) : null),
-    [spec, target, imgReady],
-  )
-  useEffect(() => {
-    const c = previewRef.current
-    if (!c || !guide || !target) return
-    c.width = target.width
-    c.height = target.height
-    const ctx = c.getContext('2d')!
-    ctx.clearRect(0, 0, c.width, c.height)
-    if (imgRef.current && overlay < 100) ctx.drawImage(imgRef.current, 0, 0, target.width, target.height)
-    const g = document.createElement('canvas')
-    g.width = target.width
-    g.height = target.height
-    g.getContext('2d')!.putImageData(guide, 0, 0)
-    ctx.globalAlpha = overlay / 100
-    ctx.drawImage(g, 0, 0)
-    ctx.globalAlpha = 1
-    if (target.bbox && spec.anchor === 'bbox') {
-      ctx.strokeStyle = '#ff4dff'
-      ctx.lineWidth = Math.max(1, target.width / 400)
-      ctx.setLineDash([6, 4])
-      const [x0, y0, x1, y1] = target.bbox
-      ctx.strokeRect(x0, y0, x1 - x0, y1 - y0)
-    }
-  }, [guide, overlay, target, spec.anchor])
+  const shift = (dx: number, dy: number) => {
+    record()
+    setPixels((p) => p.map((_, i) => p[mod(Math.floor(i / tileW) - dy, tileH) * tileW + mod((i % tileW) - dx, tileW)]))
+    setDirty(true)
+  }
 
-  const save = async () => {
+  const loadTile = (s: PatternSpec) => {
+    history.current = []
+    future.current = []
+    setTileW(s.w)
+    setTileH(s.h)
+    setSizeW(s.w)
+    setSizeH(s.h)
+    setPixels(s.pixels.map((p) => p || WHITE))
+    setDirty(true)
+  }
+
+  // ---- save / navigate ----------------------------------------------------
+  const save = async (quiet = false) => {
+    if (!item || !outW || !outH) return false
     setSaving(true)
     try {
-      const r = await api.savePattern(dataset, item.path, spec)
+      const r = await api.savePattern(dataset, item.path, { w: tileW, h: tileH, pixels, out_w: outW, out_h: outH })
       const extra = r.written.length - 1
-      toast(`'${r.dataset}' 에 저장됨${extra ? ` (+ flip 거울 패턴 ${extra}개)` : ''}`, 'success')
+      if (!quiet) toast(`'${r.dataset}' 에 저장됨${extra ? ` (+ flip 거울 패턴 ${extra}개)` : ''}`, 'success')
       setDirty(false)
+      setHasExisting(true)
       onSaved()
-      onClose()
+      return true
     } catch (e) {
       toast(errorText(e), 'error')
+      return false
     } finally {
       setSaving(false)
     }
+  }
+
+  const go = async (delta: number) => {
+    const next = index + delta
+    if (next < 0 || next >= items.length || saving) return
+    // Unsaved changes are saved before moving on.
+    if (dirty) {
+      if (!(await save(true))) return
+      toast(`'${item.path}' 저장됨`, 'success')
+    }
+    setIndex(next)
   }
 
   const remove = async () => {
@@ -416,8 +340,9 @@ export default function PatternEditor({
     try {
       await api.deletePattern(dataset, item.path)
       toast('패턴을 삭제했습니다.', 'success')
+      setHasExisting(false)
+      setDirty(false)
       onSaved()
-      onClose()
     } catch (e) {
       toast(errorText(e), 'error')
     }
@@ -428,8 +353,39 @@ export default function PatternEditor({
     onClose()
   }
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return
+      const k = e.key.toLowerCase()
+      if ((e.ctrlKey || e.metaKey) && k === 'z') {
+        e.preventDefault()
+        if (e.shiftKey) redo()
+        else undo()
+      } else if ((e.ctrlKey || e.metaKey) && k === 'y') {
+        e.preventDefault()
+        redo()
+      } else if ((e.ctrlKey || e.metaKey) && k === 's') {
+        e.preventDefault()
+        save()
+      } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (k === 'b') setTool('pen')
+        if (k === 'e') setTool('eraser')
+        if (k === 'g') setTool('fill')
+        if (k === 'i') setTool('picker')
+        const n = Number(e.key)
+        if (n >= 1 && n <= PRESET_COLORS.length) {
+          setColor(PRESET_COLORS[n - 1])
+          setTool('pen')
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+
+  if (!item) return null
   const unique = patterns?.unique ?? []
-  const palette = [...new Set([...recent, ...BASE_COLORS])].slice(0, 18)
 
   return (
     <Modal onClose={close} wide>
@@ -438,12 +394,27 @@ export default function PatternEditor({
           <h3>패턴 · {item.path}</h3>
           <span className="muted small">
             → <code>{patterns?.dataset ?? `${dataset}_pattern`}</code>/{item.path.replace(/\.[^/.]+$/, '')}.png
-            {target && ` · ${target.width}×${target.height}`}
           </span>
+          {dirty && <span className="badge warn">저장 안 됨</span>}
+          {!dirty && hasExisting && <span className="badge ok">저장됨</span>}
           {target?.mirrored && !target.spec && (
-            <span className="badge warn">지금은 원본 패턴의 거울 이미지입니다. 저장하면 이 항목만 따로 바뀝니다.</span>
+            <span className="badge warn">원본 패턴의 거울 이미지 · 저장하면 이 항목만 바뀝니다</span>
           )}
           <div className="spacer" />
+          <span className="muted small">
+            {index + 1} / {items.length}
+          </span>
+          <button onClick={() => go(-1)} disabled={index === 0 || saving} title="이전 데이터 (변경사항은 저장 후 이동)">
+            ‹ 이전
+          </button>
+          <button
+            className="primary"
+            onClick={() => go(1)}
+            disabled={index >= items.length - 1 || saving}
+            title="다음 데이터 (변경사항은 저장 후 이동)"
+          >
+            {dirty ? '저장 후 다음 ›' : '다음 ›'}
+          </button>
           <button className="ghost" onClick={close}>
             ✕
           </button>
@@ -457,8 +428,8 @@ export default function PatternEditor({
                 <button
                   key={u.digest}
                   className="pe-unique-item"
-                  title={`${u.spec.w}×${u.spec.h} · 셀 ${u.spec.cell}px · ${u.count}개 사용\n${u.keys.join('\n')}`}
-                  onClick={() => loadSpec(u.spec)}
+                  title={`${u.spec.w}×${u.spec.h} · ${u.count}개 사용\n${u.keys.join('\n')}`}
+                  onClick={() => loadTile(u.spec)}
                 >
                   <TileThumb spec={u.spec} />
                   <span className="small">
@@ -478,17 +449,36 @@ export default function PatternEditor({
                 <input type="number" min={1} max={256} value={sizeW} onChange={(e) => setSizeW(+e.target.value)} />
                 ×
                 <input type="number" min={1} max={256} value={sizeH} onChange={(e) => setSizeH(+e.target.value)} />
-                <button onClick={() => resize(sizeW, sizeH)} disabled={sizeW === spec.w && sizeH === spec.h}>
+                <button onClick={() => resizeTile(sizeW, sizeH)} disabled={sizeW === tileW && sizeH === tileH}>
                   적용
                 </button>
               </div>
               <div className="row wrap">
                 {SIZE_PRESETS.map(([w, h]) => (
-                  <button key={`${w}x${h}`} className="chip" onClick={() => resize(w, h)}>
+                  <button key={`${w}x${h}`} className="chip" onClick={() => resizeTile(w, h)}>
                     {w}×{h}
                   </button>
                 ))}
               </div>
+            </div>
+            <div className="pe-group">
+              <span className="pe-label">저장 크기 (타일을 꽉 차게 늘림)</span>
+              <div className="row">
+                <input type="number" min={1} max={8192} value={outW ?? ''} onChange={(e) => setOut(+e.target.value, outH ?? 1)} />
+                ×
+                <input type="number" min={1} max={8192} value={outH ?? ''} onChange={(e) => setOut(outW ?? 1, +e.target.value)} />
+                px
+              </div>
+              {target && (
+                <button
+                  className="chip"
+                  onClick={() => setOut(target.width, target.height)}
+                  disabled={outW === target.width && outH === target.height}
+                >
+                  원본 크기 {target.width}×{target.height}
+                </button>
+              )}
+              <span className="muted small">이 데이터셋의 다른 데이터에도 같은 크기가 기본으로 쓰입니다.</span>
             </div>
             <div className="pe-group">
               <span className="pe-label">도구</span>
@@ -506,27 +496,24 @@ export default function PatternEditor({
                   </button>
                 ))}
               </div>
-              <span className="muted small">우클릭 = 지우기 · Ctrl+Z / Ctrl+Shift+Z</span>
+              <span className="muted small">우클릭 = 지우기(흰색) · Ctrl+Z 되돌리기 · Ctrl+S 저장</span>
             </div>
             <div className="pe-group">
-              <span className="pe-label">색</span>
-              <div className="row">
-                <input type="color" value={color || '#ffffff'} onChange={(e) => setColor(e.target.value)} />
-                <code>{color}</code>
-              </div>
+              <span className="pe-label">색 (단축키 1~5)</span>
               <div className="pe-palette">
-                {palette.map((c) => (
+                {PRESET_COLORS.map((c, i) => (
                   <button
                     key={c}
                     className={`swatch ${c === color ? 'active' : ''}`}
                     style={{ background: c }}
-                    title={c}
+                    title={`${c} (${i + 1})`}
                     onClick={() => {
-                      pickColor(c)
+                      setColor(c)
                       if (tool === 'eraser' || tool === 'picker') setTool('pen')
                     }}
                   />
                 ))}
+                <code className="small">{color}</code>
               </div>
             </div>
             <div className="pe-group">
@@ -545,7 +532,14 @@ export default function PatternEditor({
                   ↓
                 </button>
                 <button onClick={undo}>되돌리기</button>
-                <button className="danger ghost" onClick={() => update({ pixels: Array(spec.w * spec.h).fill('') })}>
+                <button
+                  className="danger ghost"
+                  onClick={() => {
+                    record()
+                    setPixels(blankTile(tileW, tileH))
+                    setDirty(true)
+                  }}
+                >
                   전체 지우기
                 </button>
               </div>
@@ -563,72 +557,26 @@ export default function PatternEditor({
               style={{ cursor: tool === 'picker' ? 'copy' : 'crosshair' }}
             />
             <span className="muted small">
-              {spec.w}×{spec.h} 타일 · 한 칸 = 출력 {spec.cell}px
+              {tileW}×{tileH} 타일 → {outW ?? '?'}×{outH ?? '?'} px 로 늘려서 저장
             </span>
           </div>
 
           <div className="pe-preview">
-            <div className="pe-group">
-              <span className="pe-label">출력 설정</span>
-              <label className="row small">
-                한 칸 크기(px)
-                <input
-                  type="number"
-                  min={1}
-                  max={512}
-                  value={spec.cell}
-                  onChange={(e) => update({ cell: Math.max(1, Math.min(512, Math.round(+e.target.value) || 1)) })}
-                />
-              </label>
-              <div className="row small">
-                기준점
-                <div className="segmented">
-                  <button className={spec.anchor === 'bbox' ? 'active' : ''} onClick={() => update({ anchor: 'bbox' })}>
-                    건물(불투명 영역) 좌상단
-                  </button>
-                  <button className={spec.anchor === 'image' ? 'active' : ''} onClick={() => update({ anchor: 'image' })}>
-                    이미지 좌상단
-                  </button>
-                </div>
-              </div>
-              <label className="row small">
-                오프셋 X
-                <input type="number" value={spec.offset_x} onChange={(e) => update({ offset_x: Math.round(+e.target.value) || 0 })} />
-                Y
-                <input type="number" value={spec.offset_y} onChange={(e) => update({ offset_y: Math.round(+e.target.value) || 0 })} />
-              </label>
-              <div className="row small">
-                그릴 영역
-                <div className="segmented">
-                  <button className={spec.clip === 'none' ? 'active' : ''} onClick={() => update({ clip: 'none' })}>
-                    캔버스 전체
-                  </button>
-                  <button className={spec.clip === 'opaque' ? 'active' : ''} onClick={() => update({ clip: 'opaque' })}>
-                    불투명 영역만
-                  </button>
-                </div>
-              </div>
-              <label className="row small">
-                빈 칸 배경
-                <select value={spec.background ? 'color' : ''} onChange={(e) => update({ background: e.target.value ? '#000000' : '' })}>
-                  <option value="">투명</option>
-                  <option value="color">색 채우기</option>
-                </select>
-                {spec.background && (
-                  <input type="color" value={spec.background} onChange={(e) => update({ background: e.target.value })} />
-                )}
-              </label>
+            <span className="pe-label">원본 보기</span>
+            <div className="pe-original" ref={zoom.containerRef}>
+              {target ? (
+                <ZoomPane zoom={zoom}>
+                  <img src={fileUrl(dataset, item)} alt={item.name} draggable={false} />
+                </ZoomPane>
+              ) : (
+                <Spinner />
+              )}
+              <ZoomBadge zoom={zoom} hint="휠로 확대 · 드래그 이동" />
             </div>
-            <div className="row small">
-              미리보기 · 원본 위 가이드 불투명도
-              <input type="range" min={0} max={100} value={overlay} onChange={(e) => setOverlay(+e.target.value)} />
-              <span className="num">{overlay}%</span>
-            </div>
-            <div className="pe-preview-canvas checker">
-              {guide ? <canvas ref={previewRef} /> : <Spinner />}
-            </div>
-            {target && !target.bbox && spec.anchor === 'bbox' && (
-              <span className="badge warn">불투명 영역이 없어 이미지 좌상단 기준으로 그립니다</span>
+            {target && (
+              <span className="muted small">
+                {target.width}×{target.height} · 더블클릭 또는 0 키로 원래 크기
+              </span>
             )}
           </div>
         </div>
@@ -640,8 +588,8 @@ export default function PatternEditor({
             </button>
           )}
           <div className="spacer" />
-          <button onClick={close}>취소</button>
-          <button className="primary" onClick={save} disabled={saving || !target}>
+          <button onClick={close}>닫기</button>
+          <button className="primary" onClick={() => save()} disabled={saving || !target || !outW || !outH}>
             {saving ? '저장 중…' : '저장'}
           </button>
         </div>

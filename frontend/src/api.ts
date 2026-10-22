@@ -146,13 +146,9 @@ export interface AlphaMaskResult {
 export interface PatternSpec {
   w: number
   h: number
-  cell: number
-  pixels: string[] // w*h, "#rrggbb" or "" (transparent), row-major
-  anchor: 'image' | 'bbox'
-  offset_x: number
-  offset_y: number
-  clip: 'none' | 'opaque'
-  background: string
+  pixels: string[] // w*h "#rrggbb", row-major
+  out_w: number // saved size: the tile is stretched to fill it
+  out_h: number
 }
 
 export interface PatternList {
@@ -160,12 +156,12 @@ export interface PatternList {
   exists: boolean
   items: Record<string, string> // item key -> pattern digest ("" = not editable)
   unique: { digest: string; spec: PatternSpec; count: number; keys: string[] }[]
+  common_size: [number, number] | null
 }
 
 export interface PatternTarget {
   width: number
   height: number
-  bbox: [number, number, number, number] | null
   spec: PatternSpec | null
   mirrored: boolean
 }

@@ -369,7 +369,8 @@ export default function DatasetPage() {
       {patternItem && (
         <PatternEditor
           dataset={name}
-          item={patternItem}
+          items={shown.filter((i) => i.kind === 'image')}
+          startIndex={Math.max(0, shown.filter((i) => i.kind === 'image').indexOf(patternItem))}
           patterns={patterns}
           onClose={() => setPatternItem(null)}
           onSaved={loadPatterns}

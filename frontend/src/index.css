@@ -1363,3 +1363,25 @@ main > .spinner {
     grid-template-columns: 1fr;
   }
 }
+.pe-original {
+  position: relative;
+  flex: 1;
+  min-height: 320px;
+  max-height: 64vh;
+  height: 64vh;
+  background: #0a0b0e;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pe-palette code {
+  align-self: center;
+  margin-left: 6px;
+}
+.pe-palette {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
