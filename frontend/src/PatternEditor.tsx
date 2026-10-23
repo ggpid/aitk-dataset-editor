@@ -19,6 +19,60 @@ const SIZE_PRESETS: [number, number][] = [
 ]
 
 const sizeKey = (dataset: string) => `aitk-editor.pattern.size.${dataset}`
+const ANCHOR_KEY = 'aitk-editor.pattern.anchor'
+
+/** Where existing pixels stay when the tile is resized: 0 = left/top, 1 = centre, 2 = right/bottom. */
+type Anchor = [number, number]
+
+function savedAnchor(): Anchor {
+  try {
+    const v = JSON.parse(localStorage.getItem(ANCHOR_KEY) ?? 'null')
+    if (Array.isArray(v) && v.length === 2 && v.every((n) => n === 0 || n === 1 || n === 2)) return [v[0], v[1]]
+  } catch {
+    /* ignore */
+  }
+  return [0, 0]
+}
+
+/** Offset of the old tile inside the new one for an anchor (negative = cropped on that side). */
+const anchorOffset = (a: number, oldSize: number, newSize: number) =>
+  a === 0 ? 0 : a === 2 ? newSize - oldSize : Math.floor((newSize - oldSize) / 2)
+
+const ANCHOR_NAMES = [
+  ['왼쪽 위', '위', '오른쪽 위'],
+  ['왼쪽', '가운데', '오른쪽'],
+  ['왼쪽 아래', '아래', '오른쪽 아래'],
+]
+const ARROWS: Record<string, string> = {
+  '-1,-1': '↖', '0,-1': '↑', '1,-1': '↗', '-1,0': '←', '1,0': '→', '-1,1': '↙', '0,1': '↓', '1,1': '↘',
+}
+
+function AnchorPicker({ value, onChange }: { value: Anchor; onChange: (a: Anchor) => void }) {
+  return (
+    <div className="anchor-picker" role="radiogroup" aria-label="크기 변경 기준">
+      {[0, 1, 2].map((y) =>
+        [0, 1, 2].map((x) => {
+          const dx = x - value[0]
+          const dy = y - value[1]
+          const selected = dx === 0 && dy === 0
+          return (
+            <button
+              key={`${x}${y}`}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              className={selected ? 'active' : ''}
+              title={`${ANCHOR_NAMES[y][x]} 고정`}
+              onClick={() => onChange([x, y])}
+            >
+              {selected ? '●' : (ARROWS[`${dx},${dy}`] ?? '')}
+            </button>
+          )
+        }),
+      )}
+    </div>
+  )
+}
 
 function savedSize(dataset: string): [number, number] | null {
   try {
@@ -83,6 +137,15 @@ export default function PatternEditor({
   const [outW, setOutW] = useState<number | null>(null)
   const [outH, setOutH] = useState<number | null>(null)
   const [hasExisting, setHasExisting] = useState(false)
+  const [anchor, setAnchorState] = useState<Anchor>(savedAnchor)
+  const setAnchor = (a: Anchor) => {
+    setAnchorState(a)
+    try {
+      localStorage.setItem(ANCHOR_KEY, JSON.stringify(a))
+    } catch {
+      /* ignore */
+    }
+  }
   const [tool, setTool] = useState<Tool>('pen')
   const [color, setColor] = useState(PRESET_COLORS[1])
   const [saving, setSaving] = useState(false)
@@ -351,10 +414,16 @@ export default function PatternEditor({
   const resizeTile = (w: number, h: number) => {
     w = Math.max(1, Math.min(256, Math.round(w) || 1))
     h = Math.max(1, Math.min(256, Math.round(h) || 1))
-    // Keep what is already drawn (top-left aligned); new cells are white.
+    // Keep what is drawn at the chosen anchor: the other sides grow (new cells white) or get cropped.
+    const ox = anchorOffset(anchor[0], tileW, w)
+    const oy = anchorOffset(anchor[1], tileH, h)
     const next = blankTile(w, h)
-    for (let y = 0; y < Math.min(h, tileH); y++)
-      for (let x = 0; x < Math.min(w, tileW); x++) next[y * w + x] = pixels[y * tileW + x]
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const sx = x - ox
+        const sy = y - oy
+        if (sx >= 0 && sy >= 0 && sx < tileW && sy < tileH) next[y * w + x] = pixels[sy * tileW + sx]
+      }
     history.current = []
     future.current = []
     setTileW(w)
@@ -536,6 +605,15 @@ export default function PatternEditor({
                 <button onClick={() => resizeTile(sizeW, sizeH)} disabled={sizeW === tileW && sizeH === tileH}>
                   적용
                 </button>
+              </div>
+              <div className="row anchor-row">
+                <AnchorPicker value={anchor} onChange={setAnchor} />
+                <span className="muted small">
+                  <b>{ANCHOR_NAMES[anchor[1]][anchor[0]]}</b> 고정 —{' '}
+                  {anchor[0] === 1 ? '좌우 양쪽' : anchor[0] === 0 ? '오른쪽' : '왼쪽'}
+                  {' · '}
+                  {anchor[1] === 1 ? '위아래 양쪽' : anchor[1] === 0 ? '아래쪽' : '위쪽'}으로 늘어나거나 줄어듭니다
+                </span>
               </div>
               <div className="row wrap">
                 {SIZE_PRESETS.map(([w, h]) => (

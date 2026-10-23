@@ -1385,3 +1385,26 @@ main > .spinner {
   gap: 6px;
   flex-wrap: wrap;
 }
+.anchor-row {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+.anchor-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 24px);
+  grid-template-rows: repeat(3, 24px);
+  gap: 2px;
+  flex-shrink: 0;
+}
+.anchor-picker button {
+  padding: 0;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--bg);
+}
+.anchor-picker button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
