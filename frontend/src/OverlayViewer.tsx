@@ -107,9 +107,16 @@ export default function OverlayViewer({
   if (mode === 'diff') topStyle.mixBlendMode = 'difference'
   if (mode === 'blink') topStyle.opacity = blinkB ? 1 : 0
   if (mode === 'a') topStyle.opacity = 0
-  // B만: hide A so nothing shows through B's letterbox when not stretched.
-  const baseStyle: CSSProperties | undefined = mode === 'b' ? { visibility: 'hidden' } : undefined
   const showing = mode === 'a' ? 'a' : mode === 'b' ? 'b' : mode === 'blink' ? (blinkB ? 'b' : 'a') : null
+  // Each region shows only its own image, even where that image is transparent:
+  // while only B is shown (B만, 깜빡임's B phase) A is hidden, and in 슬라이더 A is clipped
+  // to the left of the divider just as B is clipped to the right.
+  const baseStyle: CSSProperties | undefined =
+    showing === 'b'
+      ? { visibility: 'hidden' }
+      : mode === 'swipe'
+        ? { clipPath: `inset(0 ${100 - swipe}% 0 0)` }
+        : undefined
 
   return (
     <Modal onClose={onClose} wide>

@@ -216,6 +216,14 @@ function PairTile({
   }
   const style: CSSProperties = mode === 'swipe' ? { ...topStyle, clipPath: `inset(0 0 0 ${pos}%)` } : topStyle
   const showing = mode === 'a' ? 'A' : mode === 'b' ? 'B' : mode === 'blink' ? (blinkB ? 'B' : 'A') : null
+  // Each region shows only its own image, even where that image is transparent:
+  // while only B is shown A is hidden, and in 슬라이더 A is clipped to the left of the divider.
+  const baseStyle: CSSProperties | undefined =
+    showing === 'B'
+      ? { visibility: 'hidden' }
+      : mode === 'swipe'
+        ? { clipPath: `inset(0 ${100 - pos}% 0 0)` }
+        : undefined
 
   return (
     <div className={`tile ${selected ? 'selected' : ''}`}>
@@ -236,6 +244,7 @@ function PairTile({
             pair={pair}
             side="a"
             size={thumbSize}
+            style={baseStyle}
             onRatio={setRatio}
           />
           <ThumbLayer dataset={b} pair={pair} side="b" size={thumbSize} style={style} />
@@ -290,7 +299,7 @@ function ThumbLayer({
         dataset={dataset}
         item={item}
         size={size}
-        style={side === 'a' ? { objectFit: item.kind === 'image' ? 'fill' : 'contain' } : style}
+        style={side === 'a' ? { objectFit: item.kind === 'image' ? 'fill' : 'contain', ...style } : style}
       />
     </div>
   )
