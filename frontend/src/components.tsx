@@ -132,3 +132,22 @@ export function useArrowKeys(onPrev: () => void, onNext: () => void) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onPrev, onNext])
 }
+
+/** 🔍 button in a thumbnail's bottom-right corner that opens the detail view
+ * (clicking the thumbnail itself only toggles its checkbox). */
+export function OpenDetailButton({ onOpen, title = '크게 보기' }: { onOpen: () => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      className="open-detail"
+      title={title}
+      aria-label={title}
+      onClick={(e) => {
+        e.stopPropagation()
+        onOpen()
+      }}
+    >
+      🔍
+    </button>
+  )
+}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, type Item, type PatternList } from '../api'
-import { CaptionEditor, Media, useArrowKeys } from '../components'
+import { CaptionEditor, Media, OpenDetailButton, useArrowKeys } from '../components'
 import AlphaMaskDialog from '../AlphaMaskDialog'
 import PatternEditor from '../PatternEditor'
 import RenameItemsDialog from '../RenameItemsDialog'
@@ -328,7 +328,7 @@ export default function DatasetPage() {
         <div className="grid" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${thumb}px, 1fr))` }}>
           {visible.map((it) => (
             <div key={it.path} className={`tile ${selected.has(it.path) ? 'selected' : ''}`}>
-              <div className="tile-media" onClick={() => setViewing(shown.indexOf(it))}>
+              <div className="tile-media" onClick={(e) => toggle(it.path, e)}>
                 <Media dataset={name} item={it} size={thumb > 256 ? 512 : 384} />
                 <input
                   type="checkbox"
@@ -341,6 +341,7 @@ export default function DatasetPage() {
                   readOnly
                 />
                 {it.is_flip && <span className="tag">flip</span>}
+                <OpenDetailButton onOpen={() => setViewing(shown.indexOf(it))} />
               </div>
               <div className="tile-body">
                 <div className="tile-name-row">

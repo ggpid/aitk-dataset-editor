@@ -711,7 +711,7 @@ main > .spinner {
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: zoom-in;
+  cursor: pointer;
   overflow: hidden;
 }
 .pair-media img,
@@ -1478,4 +1478,31 @@ main > .spinner {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px 10px;
+}
+
+/* ---- thumbnail click = select, 🔍 = detail ---- */
+.tile-media,
+.pair-media {
+  cursor: pointer;
+  user-select: none;
+}
+.open-detail {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 3;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  justify-content: center;
+  font-size: 14px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  border-color: rgba(255, 255, 255, 0.25);
+  opacity: 0.85;
+}
+.open-detail:hover {
+  opacity: 1;
+  background: var(--accent);
+  border-color: var(--accent);
 }

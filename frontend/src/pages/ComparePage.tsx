@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, type CompareResult, type DatasetSummary, type Item, type Pair } from '../api'
-import { CaptionEditor, Media } from '../components'
+import { CaptionEditor, Media, OpenDetailButton } from '../components'
 import DatasetCombo from '../DatasetCombo'
 import MaskDialog from '../MaskDialog'
 import { CancelledError, useJobs } from '../jobs'
@@ -485,9 +485,10 @@ function PairedList({
           <div className="pair-body">
             {(['a', 'b'] as const).map((side) => (
               <div key={side} className="pair-side">
-                <div className="pair-media" onClick={() => onOpen(i)}>
+                <div className="pair-media" onClick={(e) => onToggle(p.key, e.shiftKey)}>
                   <Media dataset={side === 'a' ? a : b} item={p[side]} />
                   <span className={`side-badge side-${side} floating`}>{side.toUpperCase()}</span>
+                  <OpenDetailButton onOpen={() => onOpen(i)} title="겹쳐보기 (크게 보기)" />
                 </div>
                 <CaptionEditor
                   dataset={side === 'a' ? a : b}

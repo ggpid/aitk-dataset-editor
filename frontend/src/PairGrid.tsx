@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { CompareOptions, Pair } from './api'
-import { Media } from './components'
+import { Media, OpenDetailButton } from './components'
 import SaveOverlayDialog from './SaveOverlayDialog'
 import { useIncremental } from './ui'
 
@@ -227,7 +227,7 @@ function PairTile({
 
   return (
     <div className={`tile ${selected ? 'selected' : ''}`}>
-      <div className="tile-media" onClick={onOpen}>
+      <div className="tile-media" onClick={(e) => onToggle(e.shiftKey)}>
         <div
           ref={stage}
           className="pg-stage"
@@ -261,6 +261,7 @@ function PairTile({
           readOnly
         />
         {showing && <span className={`side-badge side-${showing.toLowerCase()} floating right`}>{showing}</span>}
+        <OpenDetailButton onOpen={onOpen} title="겹쳐보기 (크게 보기)" />
       </div>
       <div className="tile-body">
         <div className="tile-name" title={pair.key} onClick={(e) => onToggle(e.shiftKey)} style={{ cursor: 'pointer' }}>
