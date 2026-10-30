@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import alphamask, config, overlay, pattern, sam, wallmask
+from . import alphamask, config, overlay, pattern, renaming, sam, wallmask
 from .datasets import IMAGE_EXTS, DatasetError, DatasetStore, clean_rename_name, compare
 from .jobs import jobs
 from .thumbs import thumbnail
@@ -180,6 +180,28 @@ def delete_items(name: str, body: PathsBody):
         return {"deleted": s.delete_items(name, body.paths, j), "flips_deleted": 0}
 
     return job_response(jobs.start("delete_items", f"'{name}' 항목 {len(body.paths)}개 삭제", [name], run))
+
+
+class RenameItemsBody(BaseModel):
+    paths: list[str]
+    prefix: str = ""
+    suffix: str = ""
+    include_linked: bool = True  # also rename linked _flip / original files
+    include_patterns: bool = True  # also rename the items' guides in <name>_pattern
+    dry_run: bool = False
+
+
+@app.post("/api/datasets/{name}/rename-items")
+def rename_items(name: str, body: RenameItemsBody):
+    s = store()
+    args = (s, name, body.paths, body.prefix, body.suffix, body.include_linked, body.include_patterns)
+    if body.dry_run:
+        p = renaming.plan(*args)
+        p.pop("_moves")
+        p["total"] = len(p["renames"])
+        p["renames"] = p["renames"][:200]  # preview only
+        return p
+    return renaming.apply(*args)
 
 
 @app.get("/api/datasets/{name}/patterns")

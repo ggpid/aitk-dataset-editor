@@ -4,6 +4,7 @@ import { api, type Item, type PatternList } from '../api'
 import { CaptionEditor, Media, useArrowKeys } from '../components'
 import AlphaMaskDialog from '../AlphaMaskDialog'
 import PatternEditor from '../PatternEditor'
+import RenameItemsDialog from '../RenameItemsDialog'
 import DuplicateDialog from '../DuplicateDialog'
 import { CancelledError, useJobs } from '../jobs'
 import RenameDialog from '../RenameDialog'
@@ -31,6 +32,7 @@ export default function DatasetPage() {
   const [alphaMasking, setAlphaMasking] = useState(false)
   const [patterns, setPatterns] = useState<PatternList | null>(null)
   const [patternItem, setPatternItem] = useState<Item | null>(null)
+  const [renamingItems, setRenamingItems] = useState<string[] | null>(null)
   const navigate = useNavigate()
 
   const load = useCallback(async () => {
@@ -295,14 +297,26 @@ export default function DatasetPage() {
           <>
             <span>{selected.size}개 선택</span>
             <button onClick={() => setSelected(new Set())}>선택 해제</button>
+            <button onClick={() => setRenamingItems([...selected])} disabled={busy}>
+              접두사/접미사
+            </button>
             <button className="danger" onClick={() => deletePaths([...selected])}>
               선택 삭제
             </button>
           </>
         ) : (
-          <button onClick={() => setSelected(new Set(shown.map((i) => i.path)))} disabled={!shown.length}>
-            보이는 항목 모두 선택
-          </button>
+          <>
+            <button
+              onClick={() => setRenamingItems(shown.map((i) => i.path))}
+              disabled={!shown.length || busy}
+              title="보이는 항목 전체의 파일명에 접두사/접미사를 붙입니다 (일부만 하려면 먼저 선택)"
+            >
+              접두사/접미사
+            </button>
+            <button onClick={() => setSelected(new Set(shown.map((i) => i.path)))} disabled={!shown.length}>
+              보이는 항목 모두 선택
+            </button>
+          </>
         )}
       </div>
 
@@ -364,6 +378,21 @@ export default function DatasetPage() {
           onClose={() => setViewing(null)}
           onCaption={updateCaption}
           onDelete={(it) => deletePaths([it.path])}
+        />
+      )}
+      {renamingItems && (
+        <RenameItemsDialog
+          dataset={name}
+          paths={renamingItems}
+          scopeLabel={selected.size ? `선택한 ${renamingItems.length}개` : `보이는 항목 ${renamingItems.length}개`}
+          hasFlips={items.some((i) => i.is_flip)}
+          hasPatterns={!!patterns?.exists}
+          onClose={() => setRenamingItems(null)}
+          onDone={() => {
+            setSelected(new Set())
+            load()
+            loadPatterns()
+          }}
         />
       )}
       {patternItem && (

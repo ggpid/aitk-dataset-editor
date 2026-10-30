@@ -1408,3 +1408,37 @@ main > .spinner {
   border-color: var(--accent);
   color: #fff;
 }
+
+/* ---- prefix / suffix rename ---- */
+.modal:has(.rename-items) {
+  max-width: 720px;
+}
+.affix-row {
+  flex-wrap: nowrap;
+  align-items: flex-end;
+}
+.affix-row .form-field {
+  flex: 1;
+}
+.affix-sample {
+  white-space: nowrap;
+  margin-bottom: 8px;
+}
+.rename-preview {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rename-table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.rename-table td {
+  padding: 2px 6px;
+  vertical-align: top;
+}

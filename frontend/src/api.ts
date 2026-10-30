@@ -166,6 +166,15 @@ export interface PatternTarget {
   mirrored: boolean
 }
 
+export interface RenamePlan {
+  renames: { from: string; to: string; linked: boolean }[]
+  total: number
+  linked: number
+  captions: number
+  patterns: number
+  conflicts: string[]
+}
+
 type MaskSource = { target: string; control: string } & CompareOptions
 
 export class ApiError extends Error {
@@ -284,6 +293,23 @@ export const api = {
   },
   makeMasks: (body: MaskSource & { name: string; preview_name: string | null; params: MaskParams }): JobStart<MaskResult> =>
     request('POST', '/api/compare/masks', body),
+
+  renameItems: <D extends boolean>(
+    name: string,
+    body: {
+      paths: string[]
+      prefix: string
+      suffix: string
+      include_linked: boolean
+      include_patterns: boolean
+      dry_run: D
+    },
+  ) =>
+    request<D extends true ? RenamePlan : { renamed: number; linked: number; captions: number; patterns: number }>(
+      'POST',
+      `${ds(name)}/rename-items`,
+      body,
+    ),
 
   listPatterns: (name: string) => request<PatternList>('GET', `${ds(name)}/patterns`),
   patternTarget: (name: string, path: string) =>
