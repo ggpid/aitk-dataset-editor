@@ -175,6 +175,17 @@ export interface RenamePlan {
   conflicts: string[]
 }
 
+export type MergeStrategy = 'prefix_conflicts' | 'prefix_all' | 'skip'
+
+export interface MergePlan {
+  items: number
+  per_source: Record<string, number>
+  conflicts: string[]
+  conflict_count: number
+  skipped: number
+  clashes: string[]
+}
+
 type MaskSource = { target: string; control: string } & CompareOptions
 
 export class ApiError extends Error {
@@ -231,6 +242,18 @@ export const api = {
       name: newName,
       include_flips: includeFlips,
     }),
+  mergeDatasets: <D extends boolean>(body: {
+    sources: string[]
+    name: string
+    strategy: MergeStrategy
+    include_flips: boolean
+    dry_run: D
+  }) =>
+    request<D extends true ? MergePlan : { job: JobInfo<{ name: string; items: number; captions: number; conflicts: number; skipped: number }> }>(
+      'POST',
+      '/api/datasets-merge',
+      body,
+    ),
   renameDataset: (name: string, newName: string) =>
     request<{ name: string }>('PATCH', ds(name), { name: newName }),
 

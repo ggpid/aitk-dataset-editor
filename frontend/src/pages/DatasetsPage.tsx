@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, type DatasetStats, type DatasetSummary } from '../api'
 import DuplicateDialog from '../DuplicateDialog'
+import MergeDialog from '../MergeDialog'
 import { CancelledError, useJobs } from '../jobs'
 import RenameDialog from '../RenameDialog'
 import { errorText, Spinner, useUi } from '../ui'
@@ -16,6 +17,8 @@ export default function DatasetsPage() {
   const [filter, setFilter] = useState('')
   const [renaming, setRenaming] = useState<string | null>(null)
   const [duplicating, setDuplicating] = useState<DatasetSummary | null>(null)
+  const [checked, setChecked] = useState<string[]>([]) // in click order (= merge order)
+  const [merging, setMerging] = useState(false)
 
   const [stats, setStats] = useState<Record<string, DatasetStats | 'error'>>({})
   const generation = useRef(0)
@@ -111,6 +114,15 @@ export default function DatasetsPage() {
       <div className="page-head">
         <h1>데이터셋</h1>
         <div className="row">
+          {checked.length > 0 && (
+            <>
+              <span className="small">{checked.length}개 선택</span>
+              <button onClick={() => setChecked([])}>선택 해제</button>
+              <button className="primary" onClick={() => setMerging(true)} disabled={checked.length < 2}>
+                선택한 {checked.length}개 합치기
+              </button>
+            </>
+          )}
           <input placeholder="검색" value={filter} onChange={(e) => setFilter(e.target.value)} />
           <input
             placeholder="새 데이터셋 이름"
@@ -129,6 +141,7 @@ export default function DatasetsPage() {
         <table className="table">
           <thead>
             <tr>
+              <th className="check-col" title="여러 개를 골라 합칠 수 있습니다" />
               <th>이름</th>
               <th className="num">파일</th>
               <th className="num">캡션</th>
@@ -138,7 +151,17 @@ export default function DatasetsPage() {
           </thead>
           <tbody>
             {shown.map((d) => (
-              <tr key={d.name}>
+              <tr key={d.name} className={checked.includes(d.name) ? 'selected' : ''}>
+                <td className="check-col">
+                  <input
+                    type="checkbox"
+                    checked={checked.includes(d.name)}
+                    onChange={(e) =>
+                      setChecked((c) => (e.target.checked ? [...c, d.name] : c.filter((x) => x !== d.name)))
+                    }
+                    aria-label={`${d.name} 선택`}
+                  />
+                </td>
                 <td>
                   <Link to={`/datasets/${encodeURIComponent(d.name)}`}>{d.name}</Link>
                 </td>
@@ -158,6 +181,16 @@ export default function DatasetsPage() {
             ))}
           </tbody>
         </table>
+      )}
+      {merging && (
+        <MergeDialog
+          sources={checked}
+          onClose={() => setMerging(false)}
+          onMerged={() => {
+            setChecked([])
+            load()
+          }}
+        />
       )}
       {duplicating && (
         <DuplicateDialog

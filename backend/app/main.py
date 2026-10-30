@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import alphamask, config, overlay, pattern, renaming, sam, wallmask
+from . import alphamask, config, merge, overlay, pattern, renaming, sam, wallmask
 from .datasets import IMAGE_EXTS, DatasetError, DatasetStore, clean_rename_name, compare
 from .jobs import jobs
 from .thumbs import thumbnail
@@ -110,6 +110,37 @@ def rename_dataset(name: str, body: NameBody):
 class DuplicateBody(BaseModel):
     name: str
     include_flips: bool = True
+
+
+class MergeBody(BaseModel):
+    sources: list[str]
+    name: str = ""
+    strategy: Literal["prefix_conflicts", "prefix_all", "skip"] = "prefix_conflicts"
+    include_flips: bool = True
+    dry_run: bool = False
+
+
+@app.post("/api/datasets-merge")
+def merge_datasets(body: MergeBody):
+    s = store()
+    if body.dry_run:
+        p = merge.plan(s, body.sources, body.strategy, body.include_flips)
+        p.pop("_files")
+        p["conflict_count"] = len(p["conflicts"])
+        p["conflicts"] = p["conflicts"][:100]
+        return p
+    new = clean_rename_name(body.name)
+    if s.dataset_dir(new, must_exist=False).exists():
+        raise DatasetError(f"이미 존재하는 데이터셋입니다: {new}", 409)
+    merge.plan(s, body.sources, body.strategy, body.include_flips)  # validate before starting the job
+    return job_response(
+        jobs.start(
+            "merge",
+            f"{len(body.sources)}개 데이터셋 합치기 → '{new}'",
+            [new],
+            lambda j: merge.merge(s, body.sources, new, body.strategy, body.include_flips, j),
+        )
+    )
 
 
 @app.get("/api/datasets/{name}/duplicate-name")

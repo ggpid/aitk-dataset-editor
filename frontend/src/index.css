@@ -1442,3 +1442,40 @@ main > .spinner {
   padding: 2px 6px;
   vertical-align: top;
 }
+
+/* ---- merge datasets ---- */
+.table .check-col {
+  width: 32px;
+  padding-right: 0;
+}
+.table tr.selected td {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.modal:has(.merge-dialog) {
+  max-width: 640px;
+}
+.merge-sources {
+  margin: 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.merge-sources li > span:first-child {
+  flex: 1;
+}
+.merge-sources li {
+  display: list-item;
+}
+.merge-sources li {
+  padding: 2px 0;
+}
+.merge-sources li .row {
+  float: right;
+  gap: 0;
+}
+.merge-summary {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
