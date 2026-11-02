@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import alphamask, config, merge, overlay, pattern, renaming, sam, wallmask
+from . import alphamask, captions, config, merge, overlay, pattern, renaming, sam, wallmask
 from .datasets import IMAGE_EXTS, DatasetError, DatasetStore, clean_rename_name, compare
 from .jobs import jobs
 from .thumbs import thumbnail
@@ -211,6 +211,23 @@ def delete_items(name: str, body: PathsBody):
         return {"deleted": s.delete_items(name, body.paths, j), "flips_deleted": 0}
 
     return job_response(jobs.start("delete_items", f"'{name}' 항목 {len(body.paths)}개 삭제", [name], run))
+
+
+class BatchCaptionBody(BaseModel):
+    paths: list[str]
+    op: captions.CaptionOp
+    include_linked: bool = True  # also change linked _flip / original captions
+    dry_run: bool = False
+
+
+@app.post("/api/datasets/{name}/captions/batch")
+def batch_captions(name: str, body: BatchCaptionBody):
+    s = store()
+    if body.dry_run:
+        p = captions.plan(s, name, body.paths, body.op, body.include_linked)
+        p["changes"] = p["changes"][:100]  # preview only
+        return p
+    return captions.apply(s, name, body.paths, body.op, body.include_linked)
 
 
 class RenameItemsBody(BaseModel):

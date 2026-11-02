@@ -1506,3 +1506,24 @@ main > .spinner {
   background: var(--accent);
   border-color: var(--accent);
 }
+
+/* ---- batch captions ---- */
+.modal:has(.caption-batch) {
+  max-width: 760px;
+}
+.sep-input {
+  width: 64px;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.caption-preview td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.cap-before {
+  color: var(--muted);
+  text-decoration: line-through;
+  white-space: pre-wrap;
+}
+.cap-after {
+  white-space: pre-wrap;
+}

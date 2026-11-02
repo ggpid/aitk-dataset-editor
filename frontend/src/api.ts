@@ -186,6 +186,23 @@ export interface MergePlan {
   clashes: string[]
 }
 
+export interface CaptionOp {
+  mode: 'set' | 'prepend' | 'append' | 'replace' | 'clear'
+  text: string
+  separator: string
+  skip_if_contains: boolean
+  only_empty: boolean
+  find: string
+  replace_with: string
+  ignore_case: boolean
+}
+
+export interface CaptionPlan {
+  targets: number
+  changed: number
+  changes: { path: string; before: string | null; after: string }[]
+}
+
 type MaskSource = { target: string; control: string } & CompareOptions
 
 export class ApiError extends Error {
@@ -331,6 +348,16 @@ export const api = {
     request<D extends true ? RenamePlan : { renamed: number; linked: number; captions: number; patterns: number }>(
       'POST',
       `${ds(name)}/rename-items`,
+      body,
+    ),
+
+  batchCaptions: <D extends boolean>(
+    name: string,
+    body: { paths: string[]; op: CaptionOp; include_linked: boolean; dry_run: D },
+  ) =>
+    request<D extends true ? CaptionPlan : { targets: number; changed: number }>(
+      'POST',
+      `${ds(name)}/captions/batch`,
       body,
     ),
 

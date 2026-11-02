@@ -5,6 +5,7 @@ import { CaptionEditor, Media, OpenDetailButton, useArrowKeys } from '../compone
 import AlphaMaskDialog from '../AlphaMaskDialog'
 import PatternEditor from '../PatternEditor'
 import RenameItemsDialog from '../RenameItemsDialog'
+import CaptionBatchDialog from '../CaptionBatchDialog'
 import DuplicateDialog from '../DuplicateDialog'
 import { CancelledError, useJobs } from '../jobs'
 import RenameDialog from '../RenameDialog'
@@ -33,6 +34,7 @@ export default function DatasetPage() {
   const [patterns, setPatterns] = useState<PatternList | null>(null)
   const [patternItem, setPatternItem] = useState<Item | null>(null)
   const [renamingItems, setRenamingItems] = useState<string[] | null>(null)
+  const [captioning, setCaptioning] = useState<string[] | null>(null)
   const navigate = useNavigate()
 
   const load = useCallback(async () => {
@@ -297,6 +299,9 @@ export default function DatasetPage() {
           <>
             <span>{selected.size}개 선택</span>
             <button onClick={() => setSelected(new Set())}>선택 해제</button>
+            <button onClick={() => setCaptioning([...selected])} disabled={busy}>
+              일괄 캡션
+            </button>
             <button onClick={() => setRenamingItems([...selected])} disabled={busy}>
               접두사/접미사
             </button>
@@ -306,6 +311,13 @@ export default function DatasetPage() {
           </>
         ) : (
           <>
+            <button
+              onClick={() => setCaptioning(shown.map((i) => i.path))}
+              disabled={!shown.length || busy}
+              title="보이는 항목 전체의 캡션을 한 번에 바꿉니다 (일부만 하려면 먼저 선택)"
+            >
+              일괄 캡션
+            </button>
             <button
               onClick={() => setRenamingItems(shown.map((i) => i.path))}
               disabled={!shown.length || busy}
@@ -379,6 +391,16 @@ export default function DatasetPage() {
           onClose={() => setViewing(null)}
           onCaption={updateCaption}
           onDelete={(it) => deletePaths([it.path])}
+        />
+      )}
+      {captioning && (
+        <CaptionBatchDialog
+          dataset={name}
+          paths={captioning}
+          scopeLabel={selected.size ? `선택한 ${captioning.length}개` : `보이는 항목 ${captioning.length}개`}
+          hasFlips={items.some((i) => i.is_flip)}
+          onClose={() => setCaptioning(null)}
+          onDone={load}
         />
       )}
       {renamingItems && (
