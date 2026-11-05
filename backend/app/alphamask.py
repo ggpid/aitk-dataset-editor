@@ -1,11 +1,13 @@
-"""Mask dataset from transparency: opaque pixels (alpha > threshold) are white, the rest
-black. Masks are PNGs named like the source images (sub folders kept), for ai-toolkit's
-``mask_path``. Optionally also writes side-by-side preview images like the wall masks.
+"""Mask dataset from transparency: opaque pixels (alpha > threshold) get one colour (white
+by default), the rest another (black by default); either colour may be (semi-)transparent.
+Masks are PNGs named like the source images (sub folders kept), for ai-toolkit's
+``mask_path``. Optionally also writes side-by-side preview images.
 """
 
 from __future__ import annotations
 
 import io
+import re
 import shutil
 from pathlib import Path
 
@@ -14,7 +16,53 @@ from PIL import Image
 
 from .datasets import DatasetError, DatasetStore, Item, clean_rename_name
 from .progress import NO_PROGRESS, Progress
-from .wallmask import MASK_EXTS, load_rgba, morph, preview_image
+from .wallmask import MASK_EXTS, load_rgba, morph
+
+WHITE = "#ffffffff"
+BLACK = "#000000ff"
+_HEX = re.compile(r"^#([0-9a-fA-F]{6})([0-9a-fA-F]{2})?$")
+
+
+def parse_rgba(value: str) -> tuple[int, int, int, int]:
+    """'#rrggbb' or '#rrggbbaa' -> (r, g, b, a)."""
+    m = _HEX.match(value.strip())
+    if not m:
+        raise DatasetError(f"잘못된 색상: {value!r} (#rrggbb 또는 #rrggbbaa)")
+    rgb, a = m.group(1), m.group(2) or "ff"
+    return int(rgb[0:2], 16), int(rgb[2:4], 16), int(rgb[4:6], 16), int(a, 16)
+
+
+def colorize(mask: np.ndarray, opaque: tuple, transparent: tuple) -> Image.Image:
+    """Paint the binary mask. Grayscale ('L') when both colours are opaque grays (the
+    classic white/black mask), RGB when both are opaque, otherwise RGBA."""
+    on = mask > 127
+    if opaque[3] == 255 and transparent[3] == 255:
+        if opaque[0] == opaque[1] == opaque[2] and transparent[0] == transparent[1] == transparent[2]:
+            return Image.fromarray(np.where(on, opaque[0], transparent[0]).astype(np.uint8), mode="L")
+        out = np.where(on[..., None], np.array(opaque[:3], np.uint8), np.array(transparent[:3], np.uint8))
+        return Image.fromarray(out.astype(np.uint8), mode="RGB")
+    out = np.where(on[..., None], np.array(opaque, np.uint8), np.array(transparent, np.uint8))
+    return Image.fromarray(out.astype(np.uint8), mode="RGBA")
+
+
+def _checker(h: int, w: int) -> np.ndarray:
+    yy, xx = np.mgrid[0:h, 0:w]
+    c = (((yy // 32) + (xx // 32)) % 2 * 40 + 200).astype(np.float32)
+    return np.stack([c] * 3, axis=-1)
+
+
+def preview_image(mask_img: Image.Image, rgba: np.ndarray) -> Image.Image:
+    """Source (left) and the mask exactly as saved (right), both over a checkerboard."""
+    h, w = rgba.shape[:2]
+    bg = _checker(h, w)
+
+    def over(arr: np.ndarray) -> np.ndarray:
+        a = arr[..., 3:4].astype(np.float32) / 255
+        return arr[..., :3].astype(np.float32) * a + bg * (1 - a)
+
+    left = over(rgba.astype(np.float32))
+    right = over(np.asarray(mask_img.convert("RGBA")).astype(np.float32))
+    return Image.fromarray(np.concatenate([left, right], axis=1).clip(0, 255).astype(np.uint8))
 
 
 def opaque_mask(path: Path, threshold: int, grow_px: int) -> tuple[np.ndarray, np.ndarray, bool]:
@@ -46,12 +94,16 @@ def info(store: DatasetStore, dataset: str) -> dict:
     }
 
 
-def preview_png(store: DatasetStore, dataset: str, path: str, threshold: int, grow_px: int) -> tuple[bytes, dict]:
+def preview_png(
+    store: DatasetStore, dataset: str, path: str, threshold: int, grow_px: int,
+    opaque_color: str = WHITE, transparent_color: str = BLACK,
+) -> tuple[bytes, dict]:
     src = store.item_path(dataset, path)
     if not src.is_file() or src.suffix.lower() not in MASK_EXTS:
         raise DatasetError("이미지를 찾을 수 없습니다.", 404)
+    on_c, off_c = parse_rgba(opaque_color), parse_rgba(transparent_color)
     mask, rgba, had_alpha = opaque_mask(src, threshold, grow_px)
-    img = preview_image(mask, rgba)
+    img = preview_image(colorize(mask, on_c, off_c), rgba)
     img.thumbnail((1600, 800), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -67,9 +119,12 @@ def make_alpha_mask_dataset(
     threshold: int = 16,
     grow_px: int = 0,
     include_flips: bool = True,
+    opaque_color: str = WHITE,
+    transparent_color: str = BLACK,
     progress: Progress = NO_PROGRESS,
 ) -> dict:
     src_dir = store.dataset_dir(dataset)
+    on_c, off_c = parse_rgba(opaque_color), parse_rgba(transparent_color)
     out_clean = clean_rename_name(out_name)
     prev_clean = clean_rename_name(preview_name) if preview_name else None
     if prev_clean == out_clean:
@@ -97,10 +152,11 @@ def make_alpha_mask_dataset(
             mask, rgba, had_alpha = opaque_mask(src_dir / it.path, threshold, grow_px)
             rel = Path(it.path).with_suffix(".png")
             (tmp_out / rel).parent.mkdir(parents=True, exist_ok=True)
-            Image.fromarray(mask, mode="L").save(tmp_out / rel)
+            out_img = colorize(mask, on_c, off_c)
+            out_img.save(tmp_out / rel)
             if tmp_prev is not None:
                 (tmp_prev / rel).parent.mkdir(parents=True, exist_ok=True)
-                preview_image(mask, rgba).save(tmp_prev / rel)
+                preview_image(out_img, rgba).save(tmp_prev / rel)
             if not had_alpha:
                 no_alpha.append(it.path)
             elif not mask.any():
@@ -116,6 +172,6 @@ def make_alpha_mask_dataset(
         "name": out_clean,
         "preview": prev_clean,
         "made": len(items),
-        "no_alpha": no_alpha,  # no transparency -> fully white mask
-        "empty": empty,  # fully transparent -> fully black mask
+        "no_alpha": no_alpha,  # no transparency -> whole mask in the opaque colour
+        "empty": empty,  # fully transparent -> whole mask in the transparent colour
     }

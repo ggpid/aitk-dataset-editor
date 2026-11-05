@@ -6,16 +6,70 @@ import { errorText, Modal, Spinner, useUi } from './ui'
 
 const PREFS_KEY = 'aitk-editor.alphamask'
 
-function loadPrefs(): { threshold: number; grow_px: number } {
-  const d = { threshold: 16, grow_px: 0 }
+interface Prefs {
+  threshold: number
+  grow_px: number
+  opaque_color: string // "#rrggbbaa"
+  transparent_color: string
+}
+
+const DEFAULTS: Prefs = { threshold: 16, grow_px: 0, opaque_color: '#ffffffff', transparent_color: '#000000ff' }
+
+function loadPrefs(): Prefs {
   try {
-    return { ...d, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') }
+    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') }
   } catch {
-    return d
+    return DEFAULTS
   }
 }
 
-/** Mask dataset from transparency: opaque pixels white, transparent black. */
+const COLOR_PRESETS: [string, string][] = [
+  ['#ffffffff', '흰색'],
+  ['#000000ff', '검은색'],
+  ['#00000000', '투명'],
+]
+
+const hex2 = (n: number) => Math.round(n).toString(16).padStart(2, '0')
+
+/** Colour + transparency picker producing "#rrggbbaa". */
+function ColorAlphaInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  const rgb = value.slice(0, 7)
+  const alpha = parseInt(value.slice(7, 9) || 'ff', 16)
+  const opacity = Math.round((alpha / 255) * 100)
+  return (
+    <div className="mask-param color-alpha">
+      <span>{label}</span>
+      <div className="row">
+        <span className="color-chip checker" title={value}>
+          <span style={{ background: rgb, opacity: alpha / 255 }} />
+        </span>
+        <input type="color" value={rgb} onChange={(e) => onChange(e.target.value + hex2(alpha))} aria-label={`${label} 색`} />
+        <label className="slider small">
+          불투명도
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={opacity}
+            onChange={(e) => onChange(rgb + hex2((+e.target.value / 100) * 255))}
+          />
+          <span className="num">{opacity}%</span>
+        </label>
+      </div>
+      <div className="row">
+        {COLOR_PRESETS.map(([v, name]) => (
+          <button type="button" key={v} className={`chip ${value === v ? 'active' : ''}`} onClick={() => onChange(v)}>
+            {name}
+          </button>
+        ))}
+        <code className="small muted">{value}</code>
+      </div>
+    </div>
+  )
+}
+
+/** Mask dataset from transparency: opaque / transparent pixels painted in chosen colours
+ * (white / black by default; either may be (semi-)transparent). */
 export default function AlphaMaskDialog({
   name,
   onClose,
@@ -132,21 +186,21 @@ export default function AlphaMaskDialog({
             </li>
             {result.preview && (
               <li>
-                확인용 이미지 → <code>{result.preview}</code> (왼쪽 원본, 오른쪽 자홍색 = 마스크)
+                확인용 이미지 → <code>{result.preview}</code> (왼쪽 원본, 오른쪽 저장된 마스크)
               </li>
             )}
           </ul>
           {result.no_alpha.length > 0 && (
             <details open>
               <summary className="error-text">
-                투명 영역이 없는 이미지 {result.no_alpha.length}개 (마스크가 전부 흰색)
+                투명 영역이 없는 이미지 {result.no_alpha.length}개 (마스크 전체가 불투명 영역 색)
               </summary>
               <pre className="key-list">{result.no_alpha.join('\n')}</pre>
             </details>
           )}
           {result.empty.length > 0 && (
             <details open>
-              <summary className="error-text">완전히 투명한 이미지 {result.empty.length}개 (마스크가 전부 검은색)</summary>
+              <summary className="error-text">완전히 투명한 이미지 {result.empty.length}개 (마스크 전체가 투명 영역 색)</summary>
               <pre className="key-list">{result.empty.join('\n')}</pre>
             </details>
           )}
@@ -170,7 +224,7 @@ export default function AlphaMaskDialog({
       >
         <h3>불투명 영역 마스크 데이터셋 생성</h3>
         <div className="small">
-          <b>{name}</b> 의 각 이미지에서 불투명한 부분은 흰색, 투명한 부분은 검은색인 마스크 PNG 를 같은 이름으로 만듭니다
+          <b>{name}</b> 의 각 이미지에서 불투명한 부분과 투명한 부분을 각각 지정한 색(기본: 흰색 / 검은색)으로 칠한 마스크 PNG 를 같은 이름으로 만듭니다
           (ai-toolkit <code>mask_path</code> 용).{' '}
           {info ? <>이미지 {count}개 대상.</> : <Spinner />}
         </div>
@@ -228,7 +282,17 @@ export default function AlphaMaskDialog({
                 <code>_flip</code> 이미지도 포함 ({info.flips}개)
               </label>
             )}
-            <button type="button" className="ghost small" onClick={() => setPrefs({ threshold: 16, grow_px: 0 })}>
+            <ColorAlphaInput
+              label="불투명 영역 색"
+              value={prefs.opaque_color}
+              onChange={(v) => setPrefs((p) => ({ ...p, opaque_color: v }))}
+            />
+            <ColorAlphaInput
+              label="투명 영역 색"
+              value={prefs.transparent_color}
+              onChange={(v) => setPrefs((p) => ({ ...p, transparent_color: v }))}
+            />
+            <button type="button" className="ghost small" onClick={() => setPrefs(DEFAULTS)}>
               기본값으로
             </button>
           </div>
@@ -260,9 +324,9 @@ export default function AlphaMaskDialog({
             </div>
             {preview && !previewErr && (
               <div className="small">
-                왼쪽 원본 · 오른쪽 <span style={{ color: '#ff4dff' }}>자홍색 = 마스크</span> · 마스크 비율{' '}
+                왼쪽 원본 · 오른쪽 저장될 마스크 (체크무늬 = 투명) · 불투명 영역 비율{' '}
                 <b>{preview.cover}%</b>
-                {!preview.hasAlpha && <span className="badge warn">투명 영역 없음 → 전부 흰색</span>}
+                {!preview.hasAlpha && <span className="badge warn">투명 영역 없음 → 전체가 불투명 영역 색</span>}
               </div>
             )}
           </div>

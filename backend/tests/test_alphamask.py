@@ -45,3 +45,36 @@ def test_alpha_mask_dataset(env):
     assert abs(float(res.headers["x-mask-cover"]) - 400 / 1200 * 100) < 0.1
     assert client.post("/api/datasets/cut/alpha-mask", json={"name": "cut_masks"}).status_code == 409
     assert client.post("/api/datasets/cut/alpha-mask", json={"name": "x", "preview_name": "x"}).status_code == 400
+
+
+def test_alpha_mask_colors(env):
+    client, aitk = env
+    d = aitk / "datasets" / "colr"
+    d.mkdir(parents=True)
+    im = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+    ImageDraw.Draw(im).rectangle((2, 2, 5, 5), fill=(9, 9, 9, 255))
+    im.save(d / "a.png")
+
+    # default stays a grayscale white/black mask
+    wait(client, client.post("/api/datasets/colr/alpha-mask", json={"name": "m_default"}))
+    with Image.open(aitk / "datasets" / "m_default" / "a.png") as m:
+        assert m.mode == "L" and m.getpixel((3, 3)) == 255 and m.getpixel((0, 0)) == 0
+
+    # opaque colours -> RGB
+    wait(client, client.post("/api/datasets/colr/alpha-mask", json={
+        "name": "m_rgb", "opaque_color": "#ff0000", "transparent_color": "#0000ffff"}))
+    with Image.open(aitk / "datasets" / "m_rgb" / "a.png") as m:
+        assert m.mode == "RGB" and m.getpixel((3, 3)) == (255, 0, 0) and m.getpixel((0, 0)) == (0, 0, 255)
+
+    # transparency in a colour -> RGBA, e.g. white on fully transparent
+    wait(client, client.post("/api/datasets/colr/alpha-mask", json={
+        "name": "m_rgba", "opaque_color": "#ffffff80", "transparent_color": "#00000000", "preview_name": "m_rgba_prev"}))
+    with Image.open(aitk / "datasets" / "m_rgba" / "a.png") as m:
+        assert m.mode == "RGBA" and m.getpixel((3, 3)) == (255, 255, 255, 128) and m.getpixel((0, 0)) == (0, 0, 0, 0)
+    assert (aitk / "datasets" / "m_rgba_prev" / "a.png").is_file()
+
+    res = client.post("/api/datasets/colr/alpha-mask/preview", json={"path": "a.png", "opaque_color": "#00ff00cc"})
+    assert res.status_code == 200
+    bad = client.post("/api/datasets/colr/alpha-mask", json={"name": "m_bad", "opaque_color": "red"})
+    assert bad.status_code == 400 and not (aitk / "datasets" / "m_bad").exists()
+    assert client.post("/api/datasets/colr/alpha-mask/preview", json={"path": "a.png", "transparent_color": "#12"}).status_code == 400
