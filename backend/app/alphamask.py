@@ -65,8 +65,29 @@ def preview_image(mask_img: Image.Image, rgba: np.ndarray) -> Image.Image:
     return Image.fromarray(np.concatenate([left, right], axis=1).clip(0, 255).astype(np.uint8))
 
 
-def opaque_mask(path: Path, threshold: int, grow_px: int) -> tuple[np.ndarray, np.ndarray, bool]:
-    """Return (mask, rgba, had_alpha). ``grow_px`` > 0 dilates, < 0 erodes the opaque area."""
+EDGE_POSITIONS = ("inside", "center", "outside")
+
+
+def edge_band(mask: Image.Image, width: int, position: str) -> Image.Image:
+    """Only the boundary of the opaque area, ``width`` px thick: inside the area, centred
+    on its boundary, or outside it (a ring around the object)."""
+    if position not in EDGE_POSITIONS:
+        raise DatasetError(f"알 수 없는 경계선 위치: {position}")
+    if position == "inside":
+        outer, inner = mask, morph(mask, "erode", width)
+    elif position == "outside":
+        outer, inner = morph(mask, "dilate", width), mask
+    else:
+        outer, inner = morph(mask, "dilate", width // 2), morph(mask, "erode", width - width // 2)
+    band = (np.asarray(outer) > 127) & ~(np.asarray(inner) > 127)
+    return Image.fromarray((band * 255).astype(np.uint8), mode="L")
+
+
+def opaque_mask(
+    path: Path, threshold: int, grow_px: int, edge_px: int = 0, edge_pos: str = "inside"
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    """Return (mask, rgba, had_alpha). ``grow_px`` > 0 dilates, < 0 erodes the opaque area.
+    With ``edge_px`` > 0 only its boundary band is kept (see ``edge_band``)."""
     with Image.open(path) as im:
         had_alpha = im.mode in ("RGBA", "LA", "PA", "La", "RGBa") or "transparency" in im.info
     rgba = load_rgba(path)
@@ -75,6 +96,8 @@ def opaque_mask(path: Path, threshold: int, grow_px: int) -> tuple[np.ndarray, n
         mask = morph(mask, "dilate", grow_px)
     elif grow_px < 0:
         mask = morph(mask, "erode", -grow_px)
+    if edge_px > 0:
+        mask = edge_band(mask, edge_px, edge_pos)
     return np.asarray(mask), rgba, had_alpha
 
 
@@ -96,13 +119,13 @@ def info(store: DatasetStore, dataset: str) -> dict:
 
 def preview_png(
     store: DatasetStore, dataset: str, path: str, threshold: int, grow_px: int,
-    opaque_color: str = WHITE, transparent_color: str = BLACK,
+    opaque_color: str = WHITE, transparent_color: str = BLACK, edge_px: int = 0, edge_pos: str = "inside",
 ) -> tuple[bytes, dict]:
     src = store.item_path(dataset, path)
     if not src.is_file() or src.suffix.lower() not in MASK_EXTS:
         raise DatasetError("이미지를 찾을 수 없습니다.", 404)
     on_c, off_c = parse_rgba(opaque_color), parse_rgba(transparent_color)
-    mask, rgba, had_alpha = opaque_mask(src, threshold, grow_px)
+    mask, rgba, had_alpha = opaque_mask(src, threshold, grow_px, edge_px, edge_pos)
     img = preview_image(colorize(mask, on_c, off_c), rgba)
     img.thumbnail((1600, 800), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
@@ -121,6 +144,8 @@ def make_alpha_mask_dataset(
     include_flips: bool = True,
     opaque_color: str = WHITE,
     transparent_color: str = BLACK,
+    edge_px: int = 0,
+    edge_pos: str = "inside",
     progress: Progress = NO_PROGRESS,
 ) -> dict:
     src_dir = store.dataset_dir(dataset)
@@ -149,7 +174,7 @@ def make_alpha_mask_dataset(
             d.mkdir()
         for it in items:
             progress.step(it.path)
-            mask, rgba, had_alpha = opaque_mask(src_dir / it.path, threshold, grow_px)
+            mask, rgba, had_alpha = opaque_mask(src_dir / it.path, threshold, grow_px, edge_px, edge_pos)
             rel = Path(it.path).with_suffix(".png")
             (tmp_out / rel).parent.mkdir(parents=True, exist_ok=True)
             out_img = colorize(mask, on_c, off_c)

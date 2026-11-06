@@ -288,6 +288,8 @@ class AlphaMaskPreviewBody(BaseModel):
     grow_px: int = 0
     opaque_color: str = alphamask.WHITE  # "#rrggbb" or "#rrggbbaa"
     transparent_color: str = alphamask.BLACK
+    edge_px: int = 0  # > 0: only the boundary, this many px thick
+    edge_pos: Literal["inside", "center", "outside"] = "inside"
 
 
 @app.post("/api/datasets/{name}/alpha-mask/preview")
@@ -295,7 +297,7 @@ async def alpha_mask_preview(name: str, body: AlphaMaskPreviewBody):
     png, info = await run_in_threadpool(
         alphamask.preview_png, store(), name, body.path,
         max(0, min(255, body.threshold)), max(-128, min(128, body.grow_px)),
-        body.opaque_color, body.transparent_color,
+        body.opaque_color, body.transparent_color, max(0, min(64, body.edge_px)), body.edge_pos,
     )
     return Response(png, media_type="image/png", headers={
         "X-Mask-Cover": str(info["cover"]),
@@ -312,6 +314,8 @@ class AlphaMaskBody(BaseModel):
     include_flips: bool = True
     opaque_color: str = alphamask.WHITE
     transparent_color: str = alphamask.BLACK
+    edge_px: int = 0
+    edge_pos: Literal["inside", "center", "outside"] = "inside"
 
 
 @app.post("/api/datasets/{name}/alpha-mask")
@@ -336,7 +340,7 @@ def make_alpha_masks(name: str, body: AlphaMaskBody):
             lambda j: alphamask.make_alpha_mask_dataset(
                 s, name, body.name, body.preview_name,
                 max(0, min(255, body.threshold)), max(-128, min(128, body.grow_px)), body.include_flips,
-                body.opaque_color, body.transparent_color, j,
+                body.opaque_color, body.transparent_color, max(0, min(64, body.edge_px)), body.edge_pos, j,
             ),
         )
     )

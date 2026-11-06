@@ -372,7 +372,15 @@ export const api = {
   alphaMaskInfo: (name: string) => request<AlphaMaskInfo>('GET', `${ds(name)}/alpha-mask/info`),
   alphaMaskPreview: async (
     name: string,
-    body: { path: string; threshold: number; grow_px: number; opaque_color: string; transparent_color: string },
+    body: {
+      path: string
+      threshold: number
+      grow_px: number
+      opaque_color: string
+      transparent_color: string
+      edge_px: number
+      edge_pos: 'inside' | 'center' | 'outside'
+    },
     signal?: AbortSignal,
   ) => {
     const res = await fetch(`${ds(name)}/alpha-mask/preview`, {
@@ -406,6 +414,8 @@ export const api = {
       include_flips: boolean
       opaque_color: string
       transparent_color: string
+      edge_px: number
+      edge_pos: 'inside' | 'center' | 'outside'
     },
   ): JobStart<AlphaMaskResult> => request('POST', `${ds(name)}/alpha-mask`, body),
 

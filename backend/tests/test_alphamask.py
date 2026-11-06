@@ -78,3 +78,38 @@ def test_alpha_mask_colors(env):
     bad = client.post("/api/datasets/colr/alpha-mask", json={"name": "m_bad", "opaque_color": "red"})
     assert bad.status_code == 400 and not (aitk / "datasets" / "m_bad").exists()
     assert client.post("/api/datasets/colr/alpha-mask/preview", json={"path": "a.png", "transparent_color": "#12"}).status_code == 400
+
+
+def test_alpha_mask_edge_only(env):
+    client, aitk = env
+    d = aitk / "datasets" / "edge"
+    d.mkdir(parents=True)
+    im = Image.new("RGBA", (20, 20), (0, 0, 0, 0))
+    ImageDraw.Draw(im).rectangle((5, 5, 14, 14), fill=(9, 9, 9, 255))  # 10x10 opaque square
+    im.save(d / "a.png")
+    on = lambda n: np.asarray(Image.open(aitk / "datasets" / n / "a.png")) > 127  # noqa: E731
+
+    # inside: 2px band inside the square (10x10 minus 6x6)
+    wait(client, client.post("/api/datasets/edge/alpha-mask", json={"name": "e_in", "edge_px": 2}))
+    m = on("e_in")
+    assert m.sum() == 100 - 36 and m[5, 5] and m[6, 9] and not m[7, 7] and not m[4, 9]
+
+    # outside: 2px ring around it (14x14 minus 10x10)
+    wait(client, client.post("/api/datasets/edge/alpha-mask", json={"name": "e_out", "edge_px": 2, "edge_pos": "outside"}))
+    m = on("e_out")
+    assert m.sum() == 196 - 100 and m[3, 9] and m[4, 9] and not m[5, 9]
+
+    # centre: 1px outside + 1px inside (12x12 minus 8x8)
+    wait(client, client.post("/api/datasets/edge/alpha-mask", json={"name": "e_mid", "edge_px": 2, "edge_pos": "center"}))
+    m = on("e_mid")
+    assert m.sum() == 144 - 64 and m[4, 9] and m[5, 9] and not m[6, 9] and not m[3, 9]
+
+    # colours still apply: edge red, rest transparent
+    wait(client, client.post("/api/datasets/edge/alpha-mask", json={
+        "name": "e_col", "edge_px": 1, "opaque_color": "#ff0000", "transparent_color": "#00000000"}))
+    with Image.open(aitk / "datasets" / "e_col" / "a.png") as m:
+        assert m.mode == "RGBA" and m.getpixel((5, 9)) == (255, 0, 0, 255) and m.getpixel((9, 9)) == (0, 0, 0, 0)
+
+    res = client.post("/api/datasets/edge/alpha-mask/preview", json={"path": "a.png", "edge_px": 2})
+    assert res.status_code == 200 and abs(float(res.headers["x-mask-cover"]) - 64 / 400 * 100) < 0.1
+    assert client.post("/api/datasets/edge/alpha-mask", json={"name": "e_bad", "edge_px": 2, "edge_pos": "middle"}).status_code == 422

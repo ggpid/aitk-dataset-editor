@@ -6,14 +6,43 @@ import { errorText, Modal, Spinner, useUi } from './ui'
 
 const PREFS_KEY = 'aitk-editor.alphamask'
 
+type EdgePos = 'inside' | 'center' | 'outside'
+
 interface Prefs {
   threshold: number
   grow_px: number
   opaque_color: string // "#rrggbbaa"
   transparent_color: string
+  shape: 'fill' | 'edge' // whole opaque area, or only its boundary
+  edge_width: number
+  edge_pos: EdgePos
 }
 
-const DEFAULTS: Prefs = { threshold: 16, grow_px: 0, opaque_color: '#ffffffff', transparent_color: '#000000ff' }
+const DEFAULTS: Prefs = {
+  threshold: 16,
+  grow_px: 0,
+  opaque_color: '#ffffffff',
+  transparent_color: '#000000ff',
+  shape: 'fill',
+  edge_width: 4,
+  edge_pos: 'inside',
+}
+
+const EDGE_POSITIONS: [EdgePos, string, string][] = [
+  ['inside', '안쪽', '불투명 영역 안쪽으로 그립니다 (윤곽 밖으로 나가지 않음)'],
+  ['center', '가운데', '경계에 걸쳐 안팎 절반씩 그립니다'],
+  ['outside', '바깥쪽', '불투명 영역 바깥쪽 둘레에 그립니다'],
+]
+
+/** What the API takes: edge_px 0 = whole area. */
+const shapeParams = (p: Prefs) => ({
+  threshold: p.threshold,
+  grow_px: p.grow_px,
+  opaque_color: p.opaque_color,
+  transparent_color: p.transparent_color,
+  edge_px: p.shape === 'edge' ? p.edge_width : 0,
+  edge_pos: p.edge_pos,
+})
 
 function loadPrefs(): Prefs {
   try {
@@ -119,7 +148,7 @@ export default function AlphaMaskDialog({
     const ctl = new AbortController()
     const t = setTimeout(async () => {
       try {
-        const r = await api.alphaMaskPreview(name, { path, ...prefs }, ctl.signal)
+        const r = await api.alphaMaskPreview(name, { path, ...shapeParams(prefs) }, ctl.signal)
         if (urlRef.current) URL.revokeObjectURL(urlRef.current)
         urlRef.current = r.url
         setPreview(r)
@@ -156,7 +185,7 @@ export default function AlphaMaskDialog({
         name: outName,
         preview_name: withPreview ? previewDs : null,
         include_flips: includeFlips,
-        ...prefs,
+        ...shapeParams(prefs),
       })
     } catch (e) {
       toast(errorText(e), 'error')
@@ -282,13 +311,76 @@ export default function AlphaMaskDialog({
                 <code>_flip</code> 이미지도 포함 ({info.flips}개)
               </label>
             )}
+            <div className="mask-param">
+              <span>마스크 모양</span>
+              <div className="segmented">
+                <button
+                  type="button"
+                  className={prefs.shape === 'fill' ? 'active' : ''}
+                  onClick={() => setPrefs((p) => ({ ...p, shape: 'fill' }))}
+                >
+                  영역 전체
+                </button>
+                <button
+                  type="button"
+                  className={prefs.shape === 'edge' ? 'active' : ''}
+                  onClick={() => setPrefs((p) => ({ ...p, shape: 'edge' }))}
+                >
+                  경계선만
+                </button>
+              </div>
+            </div>
+            {prefs.shape === 'edge' && (
+              <>
+                <label className="mask-param">
+                  <span>
+                    경계선 두께(px) <span className="muted small">1~64</span>
+                  </span>
+                  <div className="row">
+                    <input
+                      type="range"
+                      min={1}
+                      max={64}
+                      value={prefs.edge_width}
+                      onChange={(e) => setPrefs((p) => ({ ...p, edge_width: +e.target.value }))}
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      max={64}
+                      value={prefs.edge_width}
+                      onChange={(e) =>
+                        setPrefs((p) => ({ ...p, edge_width: Math.max(1, Math.min(64, Math.round(+e.target.value) || 1)) }))
+                      }
+                    />
+                  </div>
+                </label>
+                <div className="mask-param">
+                  <span>경계선 위치</span>
+                  <div className="segmented">
+                    {EDGE_POSITIONS.map(([v, label, help]) => (
+                      <button
+                        type="button"
+                        key={v}
+                        title={help}
+                        className={prefs.edge_pos === v ? 'active' : ''}
+                        onClick={() => setPrefs((p) => ({ ...p, edge_pos: v }))}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="muted small">{EDGE_POSITIONS.find((e) => e[0] === prefs.edge_pos)![2]}</span>
+                </div>
+              </>
+            )}
             <ColorAlphaInput
-              label="불투명 영역 색"
+              label={prefs.shape === 'edge' ? '경계선 색' : '불투명 영역 색'}
               value={prefs.opaque_color}
               onChange={(v) => setPrefs((p) => ({ ...p, opaque_color: v }))}
             />
             <ColorAlphaInput
-              label="투명 영역 색"
+              label={prefs.shape === 'edge' ? '나머지 영역 색' : '투명 영역 색'}
               value={prefs.transparent_color}
               onChange={(v) => setPrefs((p) => ({ ...p, transparent_color: v }))}
             />
@@ -324,7 +416,7 @@ export default function AlphaMaskDialog({
             </div>
             {preview && !previewErr && (
               <div className="small">
-                왼쪽 원본 · 오른쪽 저장될 마스크 (체크무늬 = 투명) · 불투명 영역 비율{' '}
+                왼쪽 원본 · 오른쪽 저장될 마스크 (체크무늬 = 투명) · {prefs.shape === 'edge' ? '경계선' : '불투명 영역'} 비율{' '}
                 <b>{preview.cover}%</b>
                 {!preview.hasAlpha && <span className="badge warn">투명 영역 없음 → 전체가 불투명 영역 색</span>}
               </div>
