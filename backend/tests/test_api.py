@@ -384,3 +384,15 @@ def test_save_overlay(env):
     assert not (aitk / "datasets" / "mix2" / "sub" / "p2.txt").exists()
 
     assert client.post("/api/compare/save-overlay", json={"a": "oa", "b": "ob", "name": "mix", "opacity": 0.5}).status_code == 409
+
+
+def test_file_download(env):
+    client, aitk = env
+    d = aitk / "datasets" / "dl"
+    d.mkdir(parents=True)
+    make_img(d / "집_01.png")
+    r = client.get("/api/datasets/dl/file", params={"path": "집_01.png"})
+    assert r.status_code == 200 and "attachment" not in r.headers.get("content-disposition", "")
+    r = client.get("/api/datasets/dl/file", params={"path": "집_01.png", "download": True})
+    cd = r.headers["content-disposition"]
+    assert r.status_code == 200 and cd.startswith("attachment") and "%EC%A7%91_01.png" in cd

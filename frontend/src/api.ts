@@ -506,5 +506,19 @@ export async function uploadWithProgress(
 export const fileUrl = (dataset: string, item: Item) =>
   `${ds(dataset)}/file?${qs({ path: item.path, v: item.mtime })}`
 
+/** URL that makes the browser save the original file (Content-Disposition: attachment). */
+export const downloadUrl = (dataset: string, item: Item) =>
+  `${ds(dataset)}/file?${qs({ path: item.path, download: true })}`
+
+/** Start a download of a URL or blob without leaving the page. */
+export function triggerDownload(href: string, filename?: string) {
+  const a = document.createElement('a')
+  a.href = href
+  if (filename) a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
 export const thumbUrl = (dataset: string, item: Item, size = 384) =>
   `${ds(dataset)}/thumb?${qs({ path: item.path, size, v: item.mtime })}`

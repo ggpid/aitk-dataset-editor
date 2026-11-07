@@ -361,10 +361,13 @@ def remove_flips(name: str):
 
 
 @app.get("/api/datasets/{name}/file")
-def get_file(name: str, path: str):
+def get_file(name: str, path: str, download: bool = False):
     p = store().item_path(name, path)
     if not p.is_file():
         raise HTTPException(404, "파일을 찾을 수 없습니다.")
+    if download:
+        # Content-Disposition: attachment (RFC 5987 encoded, so Korean names survive)
+        return FileResponse(p, filename=p.name, headers={"Cache-Control": "no-cache"})
     return FileResponse(p, headers={"Cache-Control": "no-cache"})
 
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, type Item, type PatternList } from '../api'
+import { api, downloadUrl, triggerDownload, type Item, type PatternList } from '../api'
 import { CaptionEditor, Media, OpenDetailButton, useArrowKeys } from '../components'
 import AlphaMaskDialog from '../AlphaMaskDialog'
 import PatternEditor from '../PatternEditor'
@@ -505,6 +505,9 @@ function Lightbox({
           <CaptionEditor dataset={dataset} item={it} rows={10} onSaved={(c) => onCaption(it.path, c)} />
           <small className="muted">Ctrl+Enter 또는 포커스 해제 시 저장 · ←/→ 이동 · 휠 확대/축소, 드래그 이동, 더블클릭·0 원래 크기 · Esc 닫기</small>
           <div className="spacer" />
+          <button onClick={() => triggerDownload(downloadUrl(dataset, it))} title="원본 파일 다운로드">
+            ⬇ 다운로드
+          </button>
           <button className="danger" onClick={() => onDelete(it)}>
             이 항목 삭제
           </button>

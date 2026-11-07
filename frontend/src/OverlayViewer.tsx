@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
-import { fileUrl, type Item, type Pair } from './api'
+import { downloadUrl, fileUrl, triggerDownload, type Item, type Pair } from './api'
 import { CaptionEditor, useArrowKeys } from './components'
-import { Modal } from './ui'
+import { errorText, Modal, useUi } from './ui'
 import { useZoom, ZoomBadge, ZoomPane } from './zoom'
 
 type Mode = 'side' | 'overlay' | 'swipe' | 'diff' | 'blink' | 'a' | 'b'
@@ -18,6 +18,83 @@ const MODES: [Mode, string][] = [
 ]
 
 const MODE_KEY = 'aitk-editor.overlay'
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('이미지를 불러오지 못했습니다.'))
+    img.src = src
+  })
+}
+
+/**
+ * Render what the viewer shows for a pair at full resolution (A's size, zoom ignored):
+ * the same rules as the on-screen view (B stretched to A or fitted inside it, opacity,
+ * difference, swipe split, one side only). Returns a PNG blob.
+ */
+async function renderView(
+  aSrc: string,
+  bSrc: string,
+  mode: Mode,
+  opts: { opacity: number; fit: Fit; swipe: number; showing: 'a' | 'b' | null },
+): Promise<Blob> {
+  const [A, B] = await Promise.all([loadImage(aSrc), loadImage(bSrc)])
+  const W = A.naturalWidth
+  const H = A.naturalHeight
+  const c = document.createElement('canvas')
+  const ctx = c.getContext('2d')!
+  if (mode === 'side') {
+    // A and B next to each other, B scaled to A's height.
+    const bw = Math.round((B.naturalWidth * H) / B.naturalHeight)
+    c.width = W + bw
+    c.height = H
+    ctx.drawImage(A, 0, 0, W, H)
+    ctx.drawImage(B, W, 0, bw, H)
+  } else {
+    c.width = W
+    c.height = H
+    let bx = 0
+    let by = 0
+    let bw = W
+    let bh = H
+    if (opts.fit === 'contain') {
+      const s = Math.min(W / B.naturalWidth, H / B.naturalHeight)
+      bw = B.naturalWidth * s
+      bh = B.naturalHeight * s
+      bx = (W - bw) / 2
+      by = (H - bh) / 2
+    }
+    const drawA = () => ctx.drawImage(A, 0, 0, W, H)
+    const drawB = () => ctx.drawImage(B, bx, by, bw, bh)
+    const only = mode === 'a' || mode === 'b' || mode === 'blink' ? opts.showing : null
+    if (only === 'a') drawA()
+    else if (only === 'b') drawB()
+    else if (mode === 'swipe') {
+      const x = (W * opts.swipe) / 100
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(0, 0, x, H)
+      ctx.clip()
+      drawA()
+      ctx.restore()
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(x, 0, W - x, H)
+      ctx.clip()
+      drawB()
+      ctx.restore()
+    } else {
+      drawA()
+      if (mode === 'diff') ctx.globalCompositeOperation = 'difference'
+      else ctx.globalAlpha = opts.opacity / 100
+      drawB()
+    }
+  }
+  return new Promise((resolve, reject) =>
+    c.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG 로 저장하지 못했습니다.'))), 'image/png'),
+  )
+}
 
 function loadPrefs(): { mode: Mode; opacity: number; fit: Fit } {
   try {
@@ -54,6 +131,8 @@ export default function OverlayViewer({
   const [fit, setFit] = useState<Fit>(prefs.fit)
   const [swipe, setSwipe] = useState(50)
   const [blinkB, setBlinkB] = useState(false)
+  const [rendering, setRendering] = useState(false)
+  const { toast } = useUi()
   const [blinkMs, setBlinkMs] = useState(600)
   const [sizes, setSizes] = useState<{ a?: [number, number]; b?: [number, number] }>({})
   const dragging = useRef(false)
@@ -167,6 +246,40 @@ export default function OverlayViewer({
             </label>
           )}
           <div className="spacer" />
+          <button title={`A 원본 다운로드 (${pair.a.name})`} onClick={() => triggerDownload(downloadUrl(a, pair.a))}>
+            ⬇ A
+          </button>
+          <button title={`B 원본 다운로드 (${pair.b.name})`} onClick={() => triggerDownload(downloadUrl(b, pair.b))}>
+            ⬇ B
+          </button>
+          <button
+            title="지금 보이는 모드 그대로 원본 해상도 PNG 로 저장 (확대/이동은 반영하지 않음)"
+            disabled={rendering || pair.a.kind !== 'image' || pair.b.kind !== 'image'}
+            onClick={async () => {
+              setRendering(true)
+              try {
+                const blob = await renderView(fileUrl(a, pair.a), fileUrl(b, pair.b), mode, { opacity, fit, swipe, showing })
+                const url = URL.createObjectURL(blob)
+                // Mode tag in the file name, e.g. p1_overlay50.png / p1_swipe25.png / p1_B.png
+                const tag =
+                  mode === 'overlay'
+                    ? `overlay${opacity}`
+                    : mode === 'swipe'
+                      ? `swipe${Math.round(swipe)}`
+                      : mode === 'a' || mode === 'b' || mode === 'blink'
+                        ? (showing ?? 'a').toUpperCase()
+                        : mode
+                triggerDownload(url, `${pair.key.replace(/\//g, '_')}_${tag}.png`)
+                setTimeout(() => URL.revokeObjectURL(url), 10000)
+              } catch (e) {
+                toast(errorText(e), 'error')
+              } finally {
+                setRendering(false)
+              }
+            }}
+          >
+            {rendering ? '저장 중…' : '⬇ 현재 보기'}
+          </button>
           <span className="muted small">
             {index + 1} / {pairs.length}
           </span>
