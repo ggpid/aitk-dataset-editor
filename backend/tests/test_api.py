@@ -191,14 +191,14 @@ def test_duplicate_dataset(env):
 
     assert client.get("/api/datasets/src/duplicate-name").json()["name"] == "src_copy"
     r = wait(client, client.post("/api/datasets/src/duplicate", json={"name": "src_copy"}))
-    assert r == {"name": "src_copy", "count": 2, "skipped_flips": 0}
+    assert r == {"name": "src_copy", "count": 2, "skipped_flips": 0, "filled": 0}
     c = aitk / "datasets" / "src_copy"
     assert sorted(p.name for p in c.iterdir()) == ["_controls", "a.png", "a.txt", "a_flip.png", "a_flip.txt"]
     assert (c / "a.txt").read_text() == "cap a"
     assert client.get("/api/datasets/src/duplicate-name").json()["name"] == "src_copy2"
 
     r = wait(client, client.post("/api/datasets/src/duplicate", json={"name": "no flips", "include_flips": False}))
-    assert r == {"name": "no_flips", "count": 1, "skipped_flips": 1}
+    assert r == {"name": "no_flips", "count": 1, "skipped_flips": 1, "filled": 0}
     assert sorted(p.name for p in (aitk / "datasets" / "no_flips").iterdir()) == ["_controls", "a.png", "a.txt"]
 
     assert client.post("/api/datasets/src/duplicate", json={"name": "src_copy"}).status_code == 409
@@ -396,3 +396,34 @@ def test_file_download(env):
     r = client.get("/api/datasets/dl/file", params={"path": "집_01.png", "download": True})
     cd = r.headers["content-disposition"]
     assert r.status_code == 200 and cd.startswith("attachment") and "%EC%A7%91_01.png" in cd
+
+
+def test_duplicate_fill_transparency(env):
+    client, aitk = env
+    d = aitk / "datasets" / "tp"
+    d.mkdir(parents=True)
+    im = Image.new("RGBA", (4, 2), (0, 0, 0, 0))
+    im.putpixel((0, 0), (255, 0, 0, 255))  # opaque red
+    im.putpixel((1, 0), (255, 0, 0, 128))  # half-transparent red
+    im.save(d / "a.png")
+    im.save(d / "w.webp", lossless=True)
+    Image.new("RGB", (4, 2), (1, 2, 3)).save(d / "j.jpg")  # no alpha: copied as-is
+    Image.new("RGBA", (4, 2), (5, 5, 5, 255)).save(d / "o.png")  # alpha but fully opaque: copied
+    (d / "a.txt").write_text("cap")
+
+    r = wait(client, client.post("/api/datasets/tp/duplicate", json={"name": "tp_bg", "fill_color": "#0000ff"}))
+    assert r["filled"] == 2 and r["count"] == 4
+    out = aitk / "datasets" / "tp_bg"
+    with Image.open(out / "a.png") as m:
+        assert m.mode == "RGB" and m.getpixel((0, 0)) == (255, 0, 0) and m.getpixel((3, 1)) == (0, 0, 255)
+        r_, _, b_ = m.getpixel((1, 0))
+        assert abs(r_ - 128) <= 2 and abs(b_ - 127) <= 2  # blended
+    with Image.open(out / "w.webp") as m:
+        assert m.mode == "RGB" and m.getpixel((3, 1))[2] > 240
+    assert (out / "j.jpg").read_bytes() == (d / "j.jpg").read_bytes()
+    assert (out / "o.png").read_bytes() == (d / "o.png").read_bytes()
+    assert (out / "a.txt").read_text() == "cap"
+    with Image.open(d / "a.png") as m:
+        assert m.mode == "RGBA"  # source untouched
+
+    assert client.post("/api/datasets/tp/duplicate", json={"name": "tp_x", "fill_color": "blue"}).status_code == 400

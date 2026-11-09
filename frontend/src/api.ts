@@ -254,10 +254,12 @@ export const api = {
     name: string,
     newName: string,
     includeFlips: boolean,
-  ): JobStart<{ name: string; count: number; skipped_flips: number }> =>
+    fillColor: string | null = null, // "#rrggbb": fill transparent areas (opaque copy)
+  ): JobStart<{ name: string; count: number; skipped_flips: number; filled: number }> =>
     request('POST', `${ds(name)}/duplicate`, {
       name: newName,
       include_flips: includeFlips,
+      fill_color: fillColor,
     }),
   mergeDatasets: <D extends boolean>(body: {
     sources: string[]

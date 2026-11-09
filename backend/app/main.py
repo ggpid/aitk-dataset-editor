@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from . import alphamask, captions, config, merge, overlay, pattern, renaming, sam, wallmask
-from .datasets import IMAGE_EXTS, DatasetError, DatasetStore, clean_rename_name, compare
+from .datasets import IMAGE_EXTS, DatasetError, DatasetStore, clean_rename_name, compare, parse_rgb
 from .jobs import jobs
 from .thumbs import thumbnail
 
@@ -110,6 +110,7 @@ def rename_dataset(name: str, body: NameBody):
 class DuplicateBody(BaseModel):
     name: str
     include_flips: bool = True
+    fill_color: str | None = None  # "#rrggbb": make transparent areas opaque with this colour
 
 
 class MergeBody(BaseModel):
@@ -158,12 +159,14 @@ def duplicate_dataset(name: str, body: DuplicateBody):
     new = clean_rename_name(body.name)
     if s.dataset_dir(new, must_exist=False).exists():
         raise DatasetError(f"이미 존재하는 데이터셋입니다: {new}", 409)
+    if body.fill_color:
+        parse_rgb(body.fill_color)
     return job_response(
         jobs.start(
             "duplicate",
             f"'{name}' → '{new}' 복제",
             [name, new],
-            lambda j: s.duplicate_dataset(name, new, body.include_flips, j),
+            lambda j: s.duplicate_dataset(name, new, body.include_flips, j, body.fill_color),
         )
     )
 

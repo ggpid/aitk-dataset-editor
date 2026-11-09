@@ -1553,3 +1553,8 @@ main > .spinner {
   border-color: var(--accent);
   color: #fff;
 }
+.fill-row input[type='color'] {
+  width: 36px;
+  height: 28px;
+  padding: 2px;
+}

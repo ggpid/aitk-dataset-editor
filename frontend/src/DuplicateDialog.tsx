@@ -19,6 +19,8 @@ export default function DuplicateDialog({
   const { runJob } = useJobs()
   const [value, setValue] = useState<string | null>(null)
   const [includeFlips, setIncludeFlips] = useState(true)
+  const [fill, setFill] = useState(false)
+  const [fillColor, setFillColor] = useState('#ffffff')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -37,7 +39,7 @@ export default function DuplicateDialog({
     let started: Awaited<ReturnType<typeof api.duplicateDataset>>
     try {
       // Name problems (invalid / already exists) come back here, so the dialog stays open for them.
-      started = await api.duplicateDataset(name, value, includeFlips)
+      started = await api.duplicateDataset(name, value, includeFlips, fill ? fillColor : null)
     } catch (e) {
       toast(errorText(e), 'error')
       setSaving(false)
@@ -48,7 +50,7 @@ export default function DuplicateDialog({
     try {
       const r = await runJob(() => Promise.resolve(started))
       toast(
-        `'${name}' → '${r.name}' 복제됨 (${r.count}개${r.skipped_flips ? `, _flip ${r.skipped_flips}개 제외` : ''})`,
+        `'${name}' → '${r.name}' 복제됨 (${r.count}개${r.skipped_flips ? `, _flip ${r.skipped_flips}개 제외` : ''}${fill ? `, 투명 이미지 ${r.filled}개를 ${fillColor} 로 채움` : ''})`,
         'success',
       )
       onDuplicated(r.name)
@@ -87,6 +89,30 @@ export default function DuplicateDialog({
                 <input type="checkbox" checked={!includeFlips} onChange={(e) => setIncludeFlips(!e.target.checked)} />
                 _flip 파일은 복제하지 않기
               </label>
+            )}
+            <label className="check">
+              <input type="checkbox" checked={fill} onChange={(e) => setFill(e.target.checked)} />
+              투명한 부분을 색으로 채워 불투명하게 복제
+            </label>
+            {fill && (
+              <div className="row small fill-row">
+                <input type="color" value={fillColor} onChange={(e) => setFillColor(e.target.value)} aria-label="채울 색" />
+                <code>{fillColor}</code>
+                {(
+                  [
+                    ['#ffffff', '흰색'],
+                    ['#000000', '검은색'],
+                    ['#808080', '회색'],
+                  ] as const
+                ).map(([c, label]) => (
+                  <button type="button" key={c} className={`chip ${fillColor === c ? 'active' : ''}`} onClick={() => setFillColor(c)}>
+                    {label}
+                  </button>
+                ))}
+                <span className="muted">
+                  PNG·WebP·TIFF 등 투명도가 있는 이미지만 바뀌고(반투명 가장자리는 자연스럽게 섞임), 나머지는 그대로 복사됩니다.
+                </span>
+              </div>
             )}
             <div className="dialog-msg small">
               이미지·캡션·<code>_controls</code> 폴더를 복사합니다. ai-toolkit 캐시 폴더(<code>*_cache</code>)는 학습 시 다시

@@ -221,10 +221,17 @@ class DatasetStore:
         return candidate
 
     def duplicate_dataset(
-        self, name: str, new_name: str, include_flips: bool = True, progress: Progress = NO_PROGRESS
+        self,
+        name: str,
+        new_name: str,
+        include_flips: bool = True,
+        progress: Progress = NO_PROGRESS,
+        fill_color: str | None = None,
     ) -> dict:
-        """Copy a dataset folder. Hidden entries and ai-toolkit cache folders (*_cache) are skipped."""
+        """Copy a dataset folder. Hidden entries and ai-toolkit cache folders (*_cache) are skipped.
+        With ``fill_color`` ("#rrggbb"), transparent areas of still images are filled with it."""
         src = self.dataset_dir(name)
+        fill = parse_rgb(fill_color) if fill_color else None
         cleaned = clean_rename_name(new_name)
         dst = self.dataset_dir(cleaned, must_exist=False)
         if dst.exists():
@@ -255,15 +262,19 @@ class DatasetStore:
             tmp.mkdir()
             for rel in folders:
                 (tmp / rel).mkdir(parents=True, exist_ok=True)
+            filled = 0
             for rel in files:
                 progress.step(rel.as_posix())
+                if fill and rel.suffix.lower() in FLATTEN_EXTS and flatten_image(src / rel, tmp / rel, fill):
+                    filled += 1
+                    continue
                 shutil.copy2(src / rel, tmp / rel)
             tmp.rename(dst)
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)
             raise
         count = sum(1 for _ in self._iter_media(dst))
-        return {"name": cleaned, "count": count, "skipped_flips": skipped_flips}
+        return {"name": cleaned, "count": count, "skipped_flips": skipped_flips, "filled": filled}
 
     # ---- items --------------------------------------------------------
     def _iter_media(self, folder: Path):
@@ -428,6 +439,45 @@ class DatasetStore:
             if not any(cap.with_suffix(e).exists() for e in MEDIA_EXTS):
                 cap.unlink()
         return {"removed": sorted(removed)}
+
+
+# Still images whose transparency can be flattened and written back in the same format.
+FLATTEN_EXTS = {".png", ".webp", ".tif", ".tiff", ".bmp"}
+_HEX_RGB = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def parse_rgb(value: str) -> tuple[int, int, int]:
+    if not _HEX_RGB.match(value.strip()):
+        raise DatasetError(f"잘못된 색상: {value!r} (#rrggbb)")
+    v = value.strip()
+    return int(v[1:3], 16), int(v[3:5], 16), int(v[5:7], 16)
+
+
+def flatten_image(src: Path, dst: Path, color: tuple[int, int, int]) -> bool:
+    """Write ``src`` to ``dst`` with transparent areas filled with ``color`` (semi-transparent
+    pixels blended), as an opaque image in the same format. Returns False when the image
+    has no transparency; then nothing is written and the caller copies it as-is."""
+    with Image.open(src) as im:
+        has_alpha = im.mode in ("RGBA", "LA", "PA", "La", "RGBa") or "transparency" in im.info
+        if not has_alpha:
+            return False
+        fmt, info = im.format, im.info
+        rgba = im.convert("RGBA")
+        if rgba.getchannel("A").getextrema()[0] == 255:
+            return False  # alpha channel present but fully opaque
+        out = Image.new("RGB", rgba.size, color)
+        out.paste(rgba, mask=rgba.getchannel("A"))
+        kwargs: dict = {}
+        if info.get("icc_profile"):
+            kwargs["icc_profile"] = info["icc_profile"]
+        if info.get("exif"):
+            kwargs["exif"] = info["exif"]
+        if fmt == "WEBP":
+            kwargs["quality"] = 95
+        tmp = dst.with_name(dst.name + ".tmp")
+        out.save(tmp, format=fmt, **kwargs)
+        tmp.replace(dst)
+    return True
 
 
 def flip_image(src: Path, dst: Path) -> None:
