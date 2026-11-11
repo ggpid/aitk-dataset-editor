@@ -120,9 +120,16 @@ export default function AlphaMaskDialog({
   const [outName, setOutName] = useState(`${name}_masks`)
   const [withPreview, setWithPreview] = useState(false)
   const [previewDs, setPreviewDs] = useState(`${name}_masks_preview`)
-  const [withOverlay, setWithOverlay] = useState(false)
-  const [overlayDs, setOverlayDs] = useState(`${name}_masks_overlay`)
+  const [withOverlay, setWithOverlayState] = useState(false)
   const [overlayOpacity, setOverlayOpacity] = useState(50)
+  // Overlay mode saves the sources with the mask laid over them into the mask dataset itself;
+  // switch the default name along unless the user typed their own.
+  const setWithOverlay = (on: boolean) => {
+    setWithOverlayState(on)
+    setOutName((n) =>
+      on && n === `${name}_masks` ? `${name}_masks_overlay` : !on && n === `${name}_masks_overlay` ? `${name}_masks` : n,
+    )
+  }
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState<AlphaMaskResult | null>(null)
   const urlRef = useRef<string | null>(null)
@@ -180,9 +187,8 @@ export default function AlphaMaskDialog({
   const finalName = previewName(outName)
   const finalPreview = previewName(previewDs)
   const count = info ? (includeFlips ? info.images : info.images - info.flips) : 0
-  const finalOverlay = previewName(overlayDs)
-  const outputs = [finalName, withPreview && finalPreview, withOverlay && finalOverlay].filter(Boolean) as string[]
-  const canSubmit = count > 0 && outputs.every((n) => !invalid(n)) && new Set(outputs).size === outputs.length
+  const canSubmit =
+    count > 0 && !invalid(finalName) && (!withPreview || (!invalid(finalPreview) && finalPreview !== finalName))
 
   const submit = async () => {
     if (!canSubmit || saving) return
@@ -194,8 +200,7 @@ export default function AlphaMaskDialog({
         preview_name: withPreview ? previewDs : null,
         include_flips: includeFlips,
         ...shapeParams(prefs),
-        overlay_name: withOverlay ? overlayDs : null,
-        overlay_opacity: overlayOpacity / 100,
+        overlay_opacity: withOverlay ? overlayOpacity / 100 : null,
       })
     } catch (e) {
       toast(errorText(e), 'error')
@@ -221,18 +226,14 @@ export default function AlphaMaskDialog({
           <h3>마스크 생성 완료</h3>
           <ul className="plain">
             <li>
-              마스크 <b>{result.made}</b>개 → <code>{result.name}</code>
+              {result.overlay ? '겹친 이미지' : '마스크'} <b>{result.made}</b>개 → <code>{result.name}</code>
             </li>
             {result.preview && (
               <li>
                 확인용 이미지 → <code>{result.preview}</code> (왼쪽 원본, 오른쪽 저장된 마스크)
               </li>
             )}
-            {result.overlay && (
-              <li>
-                원본 위에 겹친 이미지 → <code>{result.overlay}</code>
-              </li>
-            )}
+            {result.overlay && <li>원본 위에 마스크를 겹친 이미지로 저장했습니다.</li>}
           </ul>
           {result.no_alpha.length > 0 && (
             <details open>
@@ -431,7 +432,7 @@ export default function AlphaMaskDialog({
             </div>
             {preview && !previewErr && (
               <div className="small">
-                {withOverlay ? '왼쪽 원본 · 가운데 마스크 · 오른쪽 원본 위에 겹침' : '왼쪽 원본 · 오른쪽 저장될 마스크'} (체크무늬 = 투명) ·{' '}{prefs.shape === 'edge' ? '경계선' : '불투명 영역'} 비율{' '}
+                {withOverlay ? '저장될 이미지 (원본 위에 마스크 겹침)' : '왼쪽 원본 · 오른쪽 저장될 마스크'} (체크무늬 = 투명) ·{' '}{prefs.shape === 'edge' ? '경계선' : '불투명 영역'} 비율{' '}
                 <b>{preview.cover}%</b>
                 {!preview.hasAlpha && <span className="badge warn">투명 영역 없음 → 전체가 불투명 영역 색</span>}
               </div>
@@ -439,7 +440,7 @@ export default function AlphaMaskDialog({
           </div>
         </div>
         <label className="form-field">
-          <span className="muted small">마스크 데이터셋 이름</span>
+          <span className="muted small">{withOverlay ? '저장할 데이터셋 이름' : '마스크 데이터셋 이름'}</span>
           <input value={outName} onChange={(e) => setOutName(e.target.value)} />
         </label>
         <label className="check small">
@@ -451,11 +452,10 @@ export default function AlphaMaskDialog({
         )}
         <label className="check small">
           <input type="checkbox" checked={withOverlay} onChange={(e) => setWithOverlay(e.target.checked)} />
-          원본 위에 마스크를 겹친 이미지도 저장 (별도 데이터셋)
+          원본 위에 마스크를 겹쳐서 저장 (마스크만 따로 저장하지 않음)
         </label>
         {withOverlay && (
           <div className="overlay-opts">
-            <input value={overlayDs} onChange={(e) => setOverlayDs(e.target.value)} aria-label="겹침 데이터셋 이름" />
             <label className="slider small">
               겹침 불투명도
               <input type="range" min={0} max={100} value={overlayOpacity} onChange={(e) => setOverlayOpacity(+e.target.value)} />
@@ -471,13 +471,7 @@ export default function AlphaMaskDialog({
               · <code>{invalid(finalPreview) ? '-' : finalPreview}</code>
             </>
           )}
-          {withOverlay && (
-            <>
-              {' '}
-              · <code>{invalid(finalOverlay) ? '-' : finalOverlay}</code>
-            </>
-          )}
-          {new Set(outputs).size !== outputs.length && <span className="error-text"> · 데이터셋 이름이 겹칩니다</span>}
+          {withPreview && finalPreview === finalName && <span className="error-text"> · 데이터셋 이름이 겹칩니다</span>}
         </div>
         <div className="row end">
           <button type="button" onClick={onClose} disabled={saving}>

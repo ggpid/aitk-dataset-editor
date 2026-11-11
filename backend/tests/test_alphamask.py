@@ -123,16 +123,18 @@ def test_alpha_mask_overlay_output(env):
     ImageDraw.Draw(im).rectangle((2, 2, 7, 7), fill=(0, 0, 200, 255))  # blue square on transparent
     im.save(d / "a.png")
     r = wait(client, client.post("/api/datasets/ovl/alpha-mask", json={
-        "name": "ovl_m", "overlay_name": "ovl_m_overlay", "overlay_opacity": 0.5,
-        "opaque_color": "#ff0000", "transparent_color": "#00000000"}))
-    assert r["overlay"] == "ovl_m_overlay"
-    with Image.open(aitk / "datasets" / "ovl_m_overlay" / "a.png") as o:
+        "name": "ovl_m", "overlay_opacity": 0.5, "opaque_color": "#ff0000", "transparent_color": "#00000000"}))
+    assert r["overlay"] is True
+    # the mask dataset itself holds the overlaid images; no extra dataset
+    assert not (aitk / "datasets" / "ovl_m_overlay").exists()
+    with Image.open(aitk / "datasets" / "ovl_m" / "a.png") as o:
         assert o.mode == "RGBA"  # source had transparency
         assert o.getpixel((0, 0)) == (0, 0, 0, 0)  # transparent mask colour leaves the source
         r_, g_, b_, a_ = o.getpixel((4, 4))  # 50% red over blue
         assert a_ == 255 and abs(r_ - 128) <= 2 and abs(b_ - 100) <= 2
     res = client.post("/api/datasets/ovl/alpha-mask/preview", json={"path": "a.png", "overlay_opacity": 0.5})
     with Image.open(__import__("io").BytesIO(res.content)) as p:
-        assert p.size == (30, 10)  # source | mask | overlay
-    # name clashes between outputs are refused
-    assert client.post("/api/datasets/ovl/alpha-mask", json={"name": "x1", "overlay_name": "x1"}).status_code == 400
+        assert p.size == (10, 10)  # a single overlaid image
+    res = client.post("/api/datasets/ovl/alpha-mask/preview", json={"path": "a.png"})
+    with Image.open(__import__("io").BytesIO(res.content)) as p:
+        assert p.size == (20, 10)  # source | mask

@@ -78,14 +78,16 @@ def test_matches_original_script(env, tmp_path):
 def test_wall_mask_overlay_output(env):
     client, aitk = env
     make_sets(aitk / "datasets")
+    wait(client, client.post("/api/compare/masks", json={"target": "tgt", "control": "ctl", "name": "wm"}))
     r = wait(client, client.post("/api/compare/masks", json={
-        "target": "tgt", "control": "ctl", "name": "wm", "overlay_name": "wm_overlay",
+        "target": "tgt", "control": "ctl", "name": "wm_ov", "overlay": True,
         "overlay_color": "#00ff00", "overlay_opacity": 1.0}))
-    assert r["overlay"] == "wm_overlay"
+    assert r["overlay"] is True
     mask = np.asarray(Image.open(aitk / "datasets" / "wm" / "b0.png")) > 127
-    ov = np.asarray(Image.open(aitk / "datasets" / "wm_overlay" / "b0.png").convert("RGBA"))
+    ov = np.asarray(Image.open(aitk / "datasets" / "wm_ov" / "b0.png").convert("RGBA"))
     src = np.asarray(Image.open(aitk / "datasets" / "tgt" / "b0.png").convert("RGBA"))
     assert (ov[mask][:, :3] == [0, 255, 0]).all()  # wall fully tinted
     assert (ov[~mask] == src[~mask]).all()  # everything else untouched
-    assert client.post("/api/compare/masks", json={"target": "tgt", "control": "ctl", "name": "w2",
-                                                   "overlay_name": "w2", "overlay_color": "#00ff00"}).status_code == 400
+    res = client.post("/api/compare/masks/preview", json={"target": "tgt", "control": "ctl", "key": "b0", "overlay": True})
+    with Image.open(__import__("io").BytesIO(res.content)) as p:
+        assert p.size == (160, 120)  # a single tinted image, not side by side

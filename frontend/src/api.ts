@@ -122,7 +122,7 @@ export interface MaskInfo {
 export interface MaskResult {
   name: string
   preview: string | null
-  overlay: string | null
+  overlay: boolean // saved images are the targets with the wall tinted
   made: number
   only_target: string[]
   only_control: string[]
@@ -139,7 +139,7 @@ export interface AlphaMaskInfo {
 export interface AlphaMaskResult {
   name: string
   preview: string | null
-  overlay: string | null
+  overlay: boolean // saved images are the sources with the mask laid over them
   made: number
   no_alpha: string[]
   empty: string[]
@@ -314,7 +314,7 @@ export const api = {
 
   masksInfo: (body: MaskSource) => request<MaskInfo>('POST', '/api/compare/masks/info', body),
   masksPreview: async (
-    body: MaskSource & { key: string; params: MaskParams; overlay_color: string; overlay_opacity: number },
+    body: MaskSource & { key: string; params: MaskParams; overlay_color: string; overlay_opacity: number; overlay: boolean },
     signal?: AbortSignal,
   ) => {
     const res = await fetch('/api/compare/masks/preview', {
@@ -343,7 +343,7 @@ export const api = {
       name: string
       preview_name: string | null
       params: MaskParams
-      overlay_name: string | null
+      overlay: boolean
       overlay_color: string
       overlay_opacity: number
     },
@@ -433,8 +433,7 @@ export const api = {
       transparent_color: string
       edge_px: number
       edge_pos: 'inside' | 'center' | 'outside'
-      overlay_name: string | null
-      overlay_opacity: number
+      overlay_opacity: number | null
     },
   ): JobStart<AlphaMaskResult> => request('POST', `${ds(name)}/alpha-mask`, body),
 
