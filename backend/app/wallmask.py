@@ -81,19 +81,50 @@ def alpha_mask(target: Path, p: MaskParams) -> tuple[np.ndarray, np.ndarray]:
     return ((tgt[..., 3] > p.alpha_threshold) * 255).astype(np.uint8), tgt
 
 
-def preview_image(mask: np.ndarray, tgt: np.ndarray) -> Image.Image:
-    """Target on a checkerboard (left) and with the mask in translucent magenta (right)."""
+OVERLAY_COLOR = (255, 0, 255)  # magenta
+OVERLAY_OPACITY = 0.55
+
+
+def check_output_names(store: DatasetStore, names: list[str | None]) -> None:
+    """New output datasets must be distinct and not exist yet."""
+    given = [n for n in names if n]
+    if len(set(given)) != len(given):
+        raise DatasetError("마스크·미리보기·겹침 데이터셋 이름이 서로 같습니다.")
+    for n in given:
+        if store.dataset_dir(n, must_exist=False).exists():
+            raise DatasetError(f"이미 존재하는 데이터셋입니다: {n}", 409)
+
+
+def tint(mask: np.ndarray, tgt: np.ndarray, color=OVERLAY_COLOR, opacity: float = OVERLAY_OPACITY) -> np.ndarray:
+    """RGBA float array: the target with the mask's white area tinted with ``color``."""
+    out = tgt.astype(np.float32).copy()
+    sel = mask > 127
+    op = max(0.0, min(1.0, opacity))
+    out[sel, :3] = out[sel, :3] * (1 - op) + np.array(color, np.float32) * op
+    return out
+
+
+def overlay_image(mask: np.ndarray, tgt: np.ndarray, color=OVERLAY_COLOR, opacity: float = OVERLAY_OPACITY) -> Image.Image:
+    """The target with the wall area tinted (its own transparency kept), for saving."""
+    out = tint(mask, tgt, color, opacity).clip(0, 255).astype(np.uint8)
+    if out[..., 3].min() == 255:
+        return Image.fromarray(out[..., :3], mode="RGB")
+    return Image.fromarray(out, mode="RGBA")
+
+
+def preview_image(mask: np.ndarray, tgt: np.ndarray, color=OVERLAY_COLOR, opacity: float = OVERLAY_OPACITY) -> Image.Image:
+    """Target on a checkerboard (left) and with the mask tinted (right)."""
     h, w = mask.shape
     yy, xx = np.mgrid[0:h, 0:w]
     checker = (((yy // 32) + (xx // 32)) % 2 * 40 + 200).astype(np.float32)
     bg = np.stack([checker] * 3, axis=-1)
-    a = tgt[..., 3:4].astype(np.float32) / 255
-    base = tgt[..., :3].astype(np.float32) * a + bg * (1 - a)
-    overlay = base.copy()
-    sel = mask > 127
-    overlay[sel] = base[sel] * 0.45 + np.array([255, 0, 255], np.float32) * 0.55
-    side = np.concatenate([base, overlay], axis=1).clip(0, 255).astype(np.uint8)
-    return Image.fromarray(side)
+
+    def over(arr: np.ndarray) -> np.ndarray:
+        a = arr[..., 3:4] / 255
+        return arr[..., :3] * a + bg * (1 - a)
+
+    side = np.concatenate([over(tgt.astype(np.float32)), over(tint(mask, tgt, color, opacity))], axis=1)
+    return Image.fromarray(side.clip(0, 255).astype(np.uint8))
 
 
 # ---- dataset-level ------------------------------------------------------------
@@ -125,6 +156,7 @@ def match(
 def preview_png(
     store: DatasetStore, target: str, control: str, key: str, p: MaskParams,
     ignore_case: bool = False, ignore_folders: bool = False,
+    overlay_color=OVERLAY_COLOR, overlay_opacity: float = OVERLAY_OPACITY,
 ) -> tuple[bytes, dict]:
     m = match(store, target, control, ignore_case, ignore_folders)
     if key not in m["targets"]:
@@ -136,7 +168,7 @@ def preview_png(
         (mask, tgt), resized = alpha_mask(t_path, p), False
     building = int((tgt[..., 3] > p.alpha_threshold).sum())
     cover = float((mask > 127).sum()) / max(building, 1) * 100
-    img = preview_image(mask, tgt)
+    img = preview_image(mask, tgt, overlay_color, overlay_opacity)
     img.thumbnail((1600, 800), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -153,15 +185,15 @@ def make_mask_dataset(
     ignore_case: bool = False,
     ignore_folders: bool = False,
     progress: Progress = NO_PROGRESS,
+    overlay_name: str | None = None,
+    overlay_color=OVERLAY_COLOR,
+    overlay_opacity: float = OVERLAY_OPACITY,
 ) -> dict:
     t_dir, c_dir = store.dataset_dir(target), store.dataset_dir(control)
     out_clean = clean_rename_name(out_name)
     prev_clean = clean_rename_name(preview_name) if preview_name else None
-    for n in filter(None, [out_clean, prev_clean]):
-        if store.dataset_dir(n, must_exist=False).exists():
-            raise DatasetError(f"이미 존재하는 데이터셋입니다: {n}", 409)
-    if prev_clean == out_clean:
-        raise DatasetError("마스크와 미리보기 데이터셋 이름이 같습니다.")
+    ov_clean = clean_rename_name(overlay_name) if overlay_name else None
+    check_output_names(store, [out_clean, prev_clean, ov_clean])
 
     m = match(store, target, control, ignore_case, ignore_folders)
     if not m["keys"]:
@@ -170,10 +202,11 @@ def make_mask_dataset(
 
     tmp_out = store.root / f".{out_clean}.masks"
     tmp_prev = store.root / f".{prev_clean}.masks" if prev_clean else None
+    tmp_ov = store.root / f".{ov_clean}.masks" if ov_clean else None
     warnings: list[dict] = []
     made = 0
     try:
-        for d in filter(None, [tmp_out, tmp_prev]):
+        for d in filter(None, [tmp_out, tmp_prev, tmp_ov]):
             if d.exists():
                 shutil.rmtree(d)
             d.mkdir()
@@ -196,7 +229,10 @@ def make_mask_dataset(
             made += 1
             if tmp_prev is not None:
                 (tmp_prev / rel).parent.mkdir(parents=True, exist_ok=True)
-                preview_image(mask, tgt).save(tmp_prev / rel)
+                preview_image(mask, tgt, overlay_color, overlay_opacity).save(tmp_prev / rel)
+            if tmp_ov is not None:
+                (tmp_ov / rel).parent.mkdir(parents=True, exist_ok=True)
+                overlay_image(mask, tgt, overlay_color, overlay_opacity).save(tmp_ov / rel)
 
             building = int((tgt[..., 3] > p.alpha_threshold).sum())
             cover = float((mask > 127).sum()) / max(building, 1) * 100
@@ -212,13 +248,16 @@ def make_mask_dataset(
         tmp_out.rename(store.root / out_clean)
         if tmp_prev is not None:
             tmp_prev.rename(store.root / prev_clean)
+        if tmp_ov is not None:
+            tmp_ov.rename(store.root / ov_clean)
     except BaseException:
-        for d in filter(None, [tmp_out, tmp_prev]):
+        for d in filter(None, [tmp_out, tmp_prev, tmp_ov]):
             shutil.rmtree(d, ignore_errors=True)
         raise
     return {
         "name": out_clean,
         "preview": prev_clean,
+        "overlay": ov_clean,
         "made": made,
         "only_target": m["only_target"],
         "only_control": m["only_control"],

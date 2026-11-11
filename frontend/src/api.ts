@@ -122,6 +122,7 @@ export interface MaskInfo {
 export interface MaskResult {
   name: string
   preview: string | null
+  overlay: string | null
   made: number
   only_target: string[]
   only_control: string[]
@@ -138,6 +139,7 @@ export interface AlphaMaskInfo {
 export interface AlphaMaskResult {
   name: string
   preview: string | null
+  overlay: string | null
   made: number
   no_alpha: string[]
   empty: string[]
@@ -311,7 +313,10 @@ export const api = {
     request('POST', '/api/compare/save-overlay', body),
 
   masksInfo: (body: MaskSource) => request<MaskInfo>('POST', '/api/compare/masks/info', body),
-  masksPreview: async (body: MaskSource & { key: string; params: MaskParams }, signal?: AbortSignal) => {
+  masksPreview: async (
+    body: MaskSource & { key: string; params: MaskParams; overlay_color: string; overlay_opacity: number },
+    signal?: AbortSignal,
+  ) => {
     const res = await fetch('/api/compare/masks/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -333,7 +338,16 @@ export const api = {
       resized: res.headers.get('X-Mask-Resized') === '1',
     }
   },
-  makeMasks: (body: MaskSource & { name: string; preview_name: string | null; params: MaskParams }): JobStart<MaskResult> =>
+  makeMasks: (
+    body: MaskSource & {
+      name: string
+      preview_name: string | null
+      params: MaskParams
+      overlay_name: string | null
+      overlay_color: string
+      overlay_opacity: number
+    },
+  ): JobStart<MaskResult> =>
     request('POST', '/api/compare/masks', body),
 
   renameItems: <D extends boolean>(
@@ -382,6 +396,7 @@ export const api = {
       transparent_color: string
       edge_px: number
       edge_pos: 'inside' | 'center' | 'outside'
+      overlay_opacity: number | null
     },
     signal?: AbortSignal,
   ) => {
@@ -418,6 +433,8 @@ export const api = {
       transparent_color: string
       edge_px: number
       edge_pos: 'inside' | 'center' | 'outside'
+      overlay_name: string | null
+      overlay_opacity: number
     },
   ): JobStart<AlphaMaskResult> => request('POST', `${ds(name)}/alpha-mask`, body),
 

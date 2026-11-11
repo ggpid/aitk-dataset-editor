@@ -16,7 +16,7 @@ from PIL import Image
 
 from .datasets import DatasetError, DatasetStore, Item, clean_rename_name
 from .progress import NO_PROGRESS, Progress
-from .wallmask import MASK_EXTS, load_rgba, morph
+from .wallmask import MASK_EXTS, check_output_names, load_rgba, morph
 
 WHITE = "#ffffffff"
 BLACK = "#000000ff"
@@ -51,8 +51,20 @@ def _checker(h: int, w: int) -> np.ndarray:
     return np.stack([c] * 3, axis=-1)
 
 
-def preview_image(mask_img: Image.Image, rgba: np.ndarray) -> Image.Image:
-    """Source (left) and the mask exactly as saved (right), both over a checkerboard."""
+def overlay_image(rgba: np.ndarray, mask_img: Image.Image, opacity: float) -> Image.Image:
+    """The source with the coloured mask laid over it at ``opacity`` (0..1). Mask colours'
+    own transparency is kept, so a transparent mask colour leaves the source visible."""
+    base = Image.fromarray(np.asarray(rgba, dtype=np.uint8), mode="RGBA")
+    layer = mask_img.convert("RGBA")
+    op = max(0.0, min(1.0, opacity))
+    if op < 1:
+        layer.putalpha(layer.getchannel("A").point(lambda v: round(v * op)))
+    out = Image.alpha_composite(base, layer)
+    return out.convert("RGB") if out.getchannel("A").getextrema()[0] == 255 else out
+
+
+def preview_image(mask_img: Image.Image, rgba: np.ndarray, overlay: Image.Image | None = None) -> Image.Image:
+    """Source (left), the mask exactly as saved, and optionally the overlay, over a checkerboard."""
     h, w = rgba.shape[:2]
     bg = _checker(h, w)
 
@@ -60,9 +72,10 @@ def preview_image(mask_img: Image.Image, rgba: np.ndarray) -> Image.Image:
         a = arr[..., 3:4].astype(np.float32) / 255
         return arr[..., :3].astype(np.float32) * a + bg * (1 - a)
 
-    left = over(rgba.astype(np.float32))
-    right = over(np.asarray(mask_img.convert("RGBA")).astype(np.float32))
-    return Image.fromarray(np.concatenate([left, right], axis=1).clip(0, 255).astype(np.uint8))
+    panels = [over(rgba.astype(np.float32)), over(np.asarray(mask_img.convert("RGBA")).astype(np.float32))]
+    if overlay is not None:
+        panels.append(over(np.asarray(overlay.convert("RGBA")).astype(np.float32)))
+    return Image.fromarray(np.concatenate(panels, axis=1).clip(0, 255).astype(np.uint8))
 
 
 EDGE_POSITIONS = ("inside", "center", "outside")
@@ -120,14 +133,17 @@ def info(store: DatasetStore, dataset: str) -> dict:
 def preview_png(
     store: DatasetStore, dataset: str, path: str, threshold: int, grow_px: int,
     opaque_color: str = WHITE, transparent_color: str = BLACK, edge_px: int = 0, edge_pos: str = "inside",
+    overlay_opacity: float | None = None,
 ) -> tuple[bytes, dict]:
     src = store.item_path(dataset, path)
     if not src.is_file() or src.suffix.lower() not in MASK_EXTS:
         raise DatasetError("이미지를 찾을 수 없습니다.", 404)
     on_c, off_c = parse_rgba(opaque_color), parse_rgba(transparent_color)
     mask, rgba, had_alpha = opaque_mask(src, threshold, grow_px, edge_px, edge_pos)
-    img = preview_image(colorize(mask, on_c, off_c), rgba)
-    img.thumbnail((1600, 800), Image.Resampling.LANCZOS)
+    mask_img = colorize(mask, on_c, off_c)
+    ov = overlay_image(rgba, mask_img, overlay_opacity) if overlay_opacity is not None else None
+    img = preview_image(mask_img, rgba, ov)
+    img.thumbnail((2400, 800), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     cover = float((mask > 127).mean()) * 100
@@ -147,16 +163,15 @@ def make_alpha_mask_dataset(
     edge_px: int = 0,
     edge_pos: str = "inside",
     progress: Progress = NO_PROGRESS,
+    overlay_name: str | None = None,
+    overlay_opacity: float = 0.5,
 ) -> dict:
     src_dir = store.dataset_dir(dataset)
     on_c, off_c = parse_rgba(opaque_color), parse_rgba(transparent_color)
     out_clean = clean_rename_name(out_name)
     prev_clean = clean_rename_name(preview_name) if preview_name else None
-    if prev_clean == out_clean:
-        raise DatasetError("마스크와 미리보기 데이터셋 이름이 같습니다.")
-    for n in filter(None, [out_clean, prev_clean]):
-        if store.dataset_dir(n, must_exist=False).exists():
-            raise DatasetError(f"이미 존재하는 데이터셋입니다: {n}", 409)
+    ov_clean = clean_rename_name(overlay_name) if overlay_name else None
+    check_output_names(store, [out_clean, prev_clean, ov_clean])
 
     items = _images(store, dataset, include_flips)
     if not items:
@@ -165,10 +180,11 @@ def make_alpha_mask_dataset(
 
     tmp_out = store.root / f".{out_clean}.alphamask"
     tmp_prev = store.root / f".{prev_clean}.alphamask" if prev_clean else None
+    tmp_ov = store.root / f".{ov_clean}.alphamask" if ov_clean else None
     no_alpha: list[str] = []
     empty: list[str] = []
     try:
-        for d in filter(None, [tmp_out, tmp_prev]):
+        for d in filter(None, [tmp_out, tmp_prev, tmp_ov]):
             if d.exists():
                 shutil.rmtree(d)
             d.mkdir()
@@ -179,9 +195,13 @@ def make_alpha_mask_dataset(
             (tmp_out / rel).parent.mkdir(parents=True, exist_ok=True)
             out_img = colorize(mask, on_c, off_c)
             out_img.save(tmp_out / rel)
+            ov = overlay_image(rgba, out_img, overlay_opacity) if tmp_ov is not None else None
             if tmp_prev is not None:
                 (tmp_prev / rel).parent.mkdir(parents=True, exist_ok=True)
                 preview_image(out_img, rgba).save(tmp_prev / rel)
+            if tmp_ov is not None:
+                (tmp_ov / rel).parent.mkdir(parents=True, exist_ok=True)
+                ov.save(tmp_ov / rel)
             if not had_alpha:
                 no_alpha.append(it.path)
             elif not mask.any():
@@ -189,13 +209,16 @@ def make_alpha_mask_dataset(
         tmp_out.rename(store.root / out_clean)
         if tmp_prev is not None:
             tmp_prev.rename(store.root / prev_clean)
+        if tmp_ov is not None:
+            tmp_ov.rename(store.root / ov_clean)
     except BaseException:
-        for d in filter(None, [tmp_out, tmp_prev]):
+        for d in filter(None, [tmp_out, tmp_prev, tmp_ov]):
             shutil.rmtree(d, ignore_errors=True)
         raise
     return {
         "name": out_clean,
         "preview": prev_clean,
+        "overlay": ov_clean,
         "made": len(items),
         "no_alpha": no_alpha,  # no transparency -> whole mask in the opaque colour
         "empty": empty,  # fully transparent -> whole mask in the transparent colour

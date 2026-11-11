@@ -293,6 +293,7 @@ class AlphaMaskPreviewBody(BaseModel):
     transparent_color: str = alphamask.BLACK
     edge_px: int = 0  # > 0: only the boundary, this many px thick
     edge_pos: Literal["inside", "center", "outside"] = "inside"
+    overlay_opacity: float | None = None  # 0..1: also show the mask laid over the source
 
 
 @app.post("/api/datasets/{name}/alpha-mask/preview")
@@ -301,6 +302,7 @@ async def alpha_mask_preview(name: str, body: AlphaMaskPreviewBody):
         alphamask.preview_png, store(), name, body.path,
         max(0, min(255, body.threshold)), max(-128, min(128, body.grow_px)),
         body.opaque_color, body.transparent_color, max(0, min(64, body.edge_px)), body.edge_pos,
+        body.overlay_opacity,
     )
     return Response(png, media_type="image/png", headers={
         "X-Mask-Cover": str(info["cover"]),
@@ -319,6 +321,14 @@ class AlphaMaskBody(BaseModel):
     transparent_color: str = alphamask.BLACK
     edge_px: int = 0
     edge_pos: Literal["inside", "center", "outside"] = "inside"
+    overlay_name: str | None = None  # also save the source with the mask laid over it
+    overlay_opacity: float = 0.5
+
+
+def _output_names(s: DatasetStore, *names: str | None) -> list[str]:
+    cleaned = [clean_rename_name(n) for n in names if n]
+    wallmask.check_output_names(s, cleaned)
+    return cleaned
 
 
 @app.post("/api/datasets/{name}/alpha-mask")
@@ -327,14 +337,7 @@ def make_alpha_masks(name: str, body: AlphaMaskBody):
     s.dataset_dir(name)
     alphamask.parse_rgba(body.opaque_color)  # validate before starting the job
     alphamask.parse_rgba(body.transparent_color)
-    names = [clean_rename_name(body.name)]
-    if body.preview_name:
-        names.append(clean_rename_name(body.preview_name))
-        if names[0] == names[1]:
-            raise DatasetError("마스크와 미리보기 데이터셋 이름이 같습니다.")
-    for n in names:
-        if s.dataset_dir(n, must_exist=False).exists():
-            raise DatasetError(f"이미 존재하는 데이터셋입니다: {n}", 409)
+    names = _output_names(s, body.name, body.preview_name, body.overlay_name)
     return job_response(
         jobs.start(
             "alpha_masks",
@@ -344,6 +347,7 @@ def make_alpha_masks(name: str, body: AlphaMaskBody):
                 s, name, body.name, body.preview_name,
                 max(0, min(255, body.threshold)), max(-128, min(128, body.grow_px)), body.include_flips,
                 body.opaque_color, body.transparent_color, max(0, min(64, body.edge_px)), body.edge_pos, j,
+                body.overlay_name, max(0.0, min(1.0, body.overlay_opacity)),
             ),
         )
     )
@@ -513,13 +517,15 @@ def masks_info(body: MaskSourceBody):
 class MaskPreviewBody(MaskSourceBody):
     key: str
     params: MaskParamsBody = MaskParamsBody()
+    overlay_color: str = "#ff00ff"  # tint for the mask's white area
+    overlay_opacity: float = wallmask.OVERLAY_OPACITY
 
 
 @app.post("/api/compare/masks/preview")
 async def masks_preview(body: MaskPreviewBody):
     png, info = await run_in_threadpool(
         wallmask.preview_png, store(), body.target, body.control, body.key, body.params.params(),
-        body.ignore_case, body.ignore_folders,
+        body.ignore_case, body.ignore_folders, parse_rgb(body.overlay_color), max(0.0, min(1.0, body.overlay_opacity)),
     )
     return Response(png, media_type="image/png", headers={
         "X-Mask-Cover": str(info["cover"]),
@@ -533,6 +539,9 @@ class MakeMasksBody(MaskSourceBody):
     name: str
     preview_name: str | None = None
     params: MaskParamsBody = MaskParamsBody()
+    overlay_name: str | None = None  # also save the target with the wall area tinted
+    overlay_color: str = "#ff00ff"
+    overlay_opacity: float = wallmask.OVERLAY_OPACITY
 
 
 @app.post("/api/compare/masks")
@@ -540,14 +549,8 @@ def make_masks(body: MakeMasksBody):
     s = store()
     s.dataset_dir(body.target)
     s.dataset_dir(body.control)
-    names = [clean_rename_name(body.name)]
-    if body.preview_name:
-        names.append(clean_rename_name(body.preview_name))
-        if names[0] == names[1]:
-            raise DatasetError("마스크와 미리보기 데이터셋 이름이 같습니다.")
-    for n in names:
-        if s.dataset_dir(n, must_exist=False).exists():
-            raise DatasetError(f"이미 존재하는 데이터셋입니다: {n}", 409)
+    color = parse_rgb(body.overlay_color)
+    names = _output_names(s, body.name, body.preview_name, body.overlay_name)
     return job_response(
         jobs.start(
             "wall_masks",
@@ -556,6 +559,7 @@ def make_masks(body: MakeMasksBody):
             lambda j: wallmask.make_mask_dataset(
                 s, body.target, body.control, body.name, body.preview_name, body.params.params(),
                 body.ignore_case, body.ignore_folders, j,
+                body.overlay_name, color, max(0.0, min(1.0, body.overlay_opacity)),
             ),
         )
     )

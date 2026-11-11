@@ -62,6 +62,10 @@ export default function MaskDialog({
   const [name, setName] = useState(`${target}_masks`)
   const [withPreview, setWithPreview] = useState(false)
   const [previewDs, setPreviewDs] = useState(`${target}_masks_preview`)
+  const [withOverlay, setWithOverlay] = useState(false)
+  const [overlayDs, setOverlayDs] = useState(`${target}_masks_overlay`)
+  const [overlayColor, setOverlayColor] = useState('#ff00ff')
+  const [overlayOpacity, setOverlayOpacity] = useState(55)
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState<MaskResult | null>(null)
   const urlRef = useRef<string | null>(null)
@@ -79,6 +83,7 @@ export default function MaskDialog({
     setInfo(null)
     setName(`${target}_masks`)
     setPreviewDs(`${target}_masks_preview`)
+    setOverlayDs(`${target}_masks_overlay`)
     api
       .masksInfo({ target, control, ...opts })
       .then((i) => {
@@ -95,7 +100,10 @@ export default function MaskDialog({
     const ctl = new AbortController()
     const t = setTimeout(async () => {
       try {
-        const r = await api.masksPreview({ target, control, key, params, ...opts }, ctl.signal)
+        const r = await api.masksPreview(
+          { target, control, key, params, ...opts, overlay_color: overlayColor, overlay_opacity: overlayOpacity / 100 },
+          ctl.signal,
+        )
         if (urlRef.current) URL.revokeObjectURL(urlRef.current)
         urlRef.current = r.url
         setPreview(r)
@@ -110,7 +118,7 @@ export default function MaskDialog({
       clearTimeout(t)
       ctl.abort()
     }
-  }, [target, control, key, params, opts])
+  }, [target, control, key, params, opts, overlayColor, overlayOpacity])
 
   useEffect(() => () => void (urlRef.current && URL.revokeObjectURL(urlRef.current)), [])
 
@@ -119,8 +127,10 @@ export default function MaskDialog({
   const finalName = previewName(name)
   const finalPreview = previewName(previewDs)
   const invalid = (n: string) => !n || n.startsWith('.') || !/[^_.-]/.test(n)
+  const finalOverlay = previewName(overlayDs)
+  const outputs = [finalName, withPreview && finalPreview, withOverlay && finalOverlay].filter(Boolean) as string[]
   const canSubmit =
-    !!info && info.targets > 0 && !invalid(finalName) && (!withPreview || (!invalid(finalPreview) && finalPreview !== finalName))
+    !!info && info.targets > 0 && outputs.every((n) => !invalid(n)) && new Set(outputs).size === outputs.length
 
   const submit = async () => {
     if (!canSubmit || saving) return
@@ -134,6 +144,9 @@ export default function MaskDialog({
         preview_name: withPreview ? previewDs : null,
         params,
         ...opts,
+        overlay_name: withOverlay ? overlayDs : null,
+        overlay_color: overlayColor,
+        overlay_opacity: overlayOpacity / 100,
       })
     } catch (e) {
       toast(errorText(e), 'error')
@@ -268,7 +281,7 @@ export default function MaskDialog({
             </div>
             {preview && !previewErr && (
               <div className="small">
-                왼쪽 원본 · 오른쪽 <span style={{ color: '#ff4dff' }}>자홍색 = 마스크</span> · 외벽 비율{' '}
+                왼쪽 원본 · 오른쪽 <span style={{ color: overlayColor }}>■ 겹침 색 = 마스크</span> · 외벽 비율{' '}
                 <b className={preview.cover < 3 || preview.cover > 95 ? 'error-text' : ''}>{preview.cover}%</b>
                 {preview.resized && <span className="badge warn">컨트롤 크기가 달라 리사이즈함</span>}
               </div>
@@ -287,6 +300,25 @@ export default function MaskDialog({
         {withPreview && (
           <input value={previewDs} onChange={(e) => setPreviewDs(e.target.value)} aria-label="미리보기 데이터셋 이름" />
         )}
+        <label className="check small">
+          <input type="checkbox" checked={withOverlay} onChange={(e) => setWithOverlay(e.target.checked)} />
+          원본 위에 마스크를 겹친 이미지도 저장 (별도 데이터셋)
+        </label>
+        {withOverlay && (
+          <div className="overlay-opts">
+            <input value={overlayDs} onChange={(e) => setOverlayDs(e.target.value)} aria-label="겹침 데이터셋 이름" />
+            <label className="row small">
+              겹침 색
+              <input type="color" value={overlayColor} onChange={(e) => setOverlayColor(e.target.value)} />
+              <code>{overlayColor}</code>
+            </label>
+            <label className="slider small">
+              겹침 불투명도
+              <input type="range" min={0} max={100} value={overlayOpacity} onChange={(e) => setOverlayOpacity(+e.target.value)} />
+              <span className="num">{overlayOpacity}%</span>
+            </label>
+          </div>
+        )}
         <div className="small muted">
           폴더: <code>{invalid(finalName) ? '-' : finalName}</code>
           {withPreview && (
@@ -294,7 +326,14 @@ export default function MaskDialog({
               {' '}
               · <code>{invalid(finalPreview) ? '-' : finalPreview}</code>
             </>
-          )}{' '}
+          )}
+          {withOverlay && (
+            <>
+              {' '}
+              · <code>{invalid(finalOverlay) ? '-' : finalOverlay}</code>
+            </>
+          )}
+          {new Set(outputs).size !== outputs.length && <span className="error-text"> · 데이터셋 이름이 겹칩니다</span>}{' '}
           · 마스크는 타깃과 같은 이름의 PNG(흰색=외벽, 검은색=나머지)로 저장됩니다.
         </div>
         <div className="row end">
@@ -321,7 +360,12 @@ function MaskResultView({ result, onClose }: { result: MaskResult; onClose: () =
           </li>
           {result.preview && (
             <li>
-              확인용 이미지 → <code>{result.preview}</code> (왼쪽 원본, 오른쪽 자홍색 = 마스크)
+              확인용 이미지 → <code>{result.preview}</code> (왼쪽 원본, 오른쪽 겹침)
+            </li>
+          )}
+          {result.overlay && (
+            <li>
+              원본 위에 겹친 이미지 → <code>{result.overlay}</code>
             </li>
           )}
         </ul>

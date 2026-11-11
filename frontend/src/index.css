@@ -1558,3 +1558,18 @@ main > .spinner {
   height: 28px;
   padding: 2px;
 }
+.overlay-opts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.overlay-opts > input {
+  flex: 1;
+  min-width: 220px;
+}
+.overlay-opts input[type='color'] {
+  width: 36px;
+  height: 28px;
+  padding: 2px;
+}

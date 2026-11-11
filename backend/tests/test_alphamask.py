@@ -113,3 +113,26 @@ def test_alpha_mask_edge_only(env):
     res = client.post("/api/datasets/edge/alpha-mask/preview", json={"path": "a.png", "edge_px": 2})
     assert res.status_code == 200 and abs(float(res.headers["x-mask-cover"]) - 64 / 400 * 100) < 0.1
     assert client.post("/api/datasets/edge/alpha-mask", json={"name": "e_bad", "edge_px": 2, "edge_pos": "middle"}).status_code == 422
+
+
+def test_alpha_mask_overlay_output(env):
+    client, aitk = env
+    d = aitk / "datasets" / "ovl"
+    d.mkdir(parents=True)
+    im = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+    ImageDraw.Draw(im).rectangle((2, 2, 7, 7), fill=(0, 0, 200, 255))  # blue square on transparent
+    im.save(d / "a.png")
+    r = wait(client, client.post("/api/datasets/ovl/alpha-mask", json={
+        "name": "ovl_m", "overlay_name": "ovl_m_overlay", "overlay_opacity": 0.5,
+        "opaque_color": "#ff0000", "transparent_color": "#00000000"}))
+    assert r["overlay"] == "ovl_m_overlay"
+    with Image.open(aitk / "datasets" / "ovl_m_overlay" / "a.png") as o:
+        assert o.mode == "RGBA"  # source had transparency
+        assert o.getpixel((0, 0)) == (0, 0, 0, 0)  # transparent mask colour leaves the source
+        r_, g_, b_, a_ = o.getpixel((4, 4))  # 50% red over blue
+        assert a_ == 255 and abs(r_ - 128) <= 2 and abs(b_ - 100) <= 2
+    res = client.post("/api/datasets/ovl/alpha-mask/preview", json={"path": "a.png", "overlay_opacity": 0.5})
+    with Image.open(__import__("io").BytesIO(res.content)) as p:
+        assert p.size == (30, 10)  # source | mask | overlay
+    # name clashes between outputs are refused
+    assert client.post("/api/datasets/ovl/alpha-mask", json={"name": "x1", "overlay_name": "x1"}).status_code == 400
